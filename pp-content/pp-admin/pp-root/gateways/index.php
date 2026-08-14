@@ -229,40 +229,90 @@
             <div class="row g-3">
               <div class="col-lg-12">
                 <label class="form-label">Gateway <span class="text-danger">*</span></label>
-                <select class="js-select" name="gateway" data-search="true" data-remove="true" data-placeholder="Select gateway" required>
-                    <?php
-                        $gateways = [];
+                <?php
+                    $gatewayRoot = dirname(__DIR__, 3)
+                        . DIRECTORY_SEPARATOR
+                        . 'pp-modules'
+                        . DIRECTORY_SEPARATOR
+                        . 'pp-gateways';
 
-                        $gatewayDirs = glob(__DIR__ . '/../../../pp-modules/pp-gateways/*', GLOB_ONLYDIR);
+                    $gateways = [];
+
+                    if (is_dir($gatewayRoot) && is_readable($gatewayRoot)) {
+                        $gatewayDirs = glob(
+                            $gatewayRoot . DIRECTORY_SEPARATOR . '*',
+                            GLOB_ONLYDIR
+                        ) ?: [];
 
                         foreach ($gatewayDirs as $dir) {
+                            $classFile = $dir . DIRECTORY_SEPARATOR . 'class.php';
 
-                            if (!file_exists($dir . '/class.php')) {
+                            if (!is_file($classFile) || !is_readable($classFile)) {
                                 continue;
                             }
-
-                            require_once $dir . '/class.php';
 
                             $slug = basename($dir);
 
-                            // twenty-six → TwentySixTheme
-                            $class = str_replace(' ', '', ucwords(str_replace('-', ' ', $slug))) . 'Gateway';
+                            $class = str_replace(
+                                ' ',
+                                '',
+                                ucwords(str_replace('-', ' ', $slug))
+                            ) . 'Gateway';
 
-                            if (!class_exists($class)) {
-                                continue;
+                            try {
+                                require_once $classFile;
+
+                                if (!class_exists($class)) {
+                                    error_log(
+                                        "PipraPay gateway class missing: {$slug} => {$class}"
+                                    );
+                                    continue;
+                                }
+
+                                $gatewayObj = new $class();
+
+                                if (!method_exists($gatewayObj, 'info')) {
+                                    error_log(
+                                        "PipraPay gateway info() missing: {$slug}"
+                                    );
+                                    continue;
+                                }
+
+                                $info = $gatewayObj->info();
+
+                                if (
+                                    !is_array($info)
+                                    || empty($info['title'])
+                                ) {
+                                    error_log(
+                                        "PipraPay invalid gateway info: {$slug}"
+                                    );
+                                    continue;
+                                }
+
+                                $gateways[$slug] = $info;
+
+                            } catch (Throwable $e) {
+                                error_log(
+                                    "Failed loading PipraPay gateway {$slug}: "
+                                    . $e->getMessage()
+                                );
                             }
-
-                            $gatewayObj = new $class();
-                            $gateways[$slug] = $gatewayObj->info();
                         }
+                    }
+                ?>
 
-                        foreach ($gateways as $slug => $gateway) {
-                    ?>
-                            <option value="<?php echo $slug?>"><?php echo $gateway['title']?></option>
-                    <?php
-                        }
-                    ?>
-                </select>
+                <?php if (!empty($gateways)): ?>
+                    <select class="js-select" name="gateway" data-search="true" data-remove="true" data-placeholder="Select gateway" required>
+                        <?php foreach ($gateways as $slug => $gateway): ?>
+                            <option value="<?php echo htmlspecialchars($slug, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($gateway['title'], ENT_QUOTES, 'UTF-8'); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                <?php else: ?>
+                    <div class="alert alert-warning mb-0" role="alert">
+                        No gateway modules were discovered. Check the gateway module directory and server error log.
+                    </div>
+                <?php endif; ?>
               </div>
             </div>
           </div>

@@ -57,8 +57,8 @@
         [
             'name'     => 'Imagick',
             'required' => 'Enabled',
-            'current'  => extension_loaded('imagick') ? 'Enabled' : 'Disabled',
-            'check'    => extension_loaded('imagick')
+            'current'  => extension_loaded('imagick') ? 'Enabled' : (extension_loaded('gd') ? 'Enabled (GD)' : 'Disabled'),
+            'check'    => extension_loaded('imagick') || extension_loaded('gd')
         ],
         [
             'name'     => 'OpenSSL',
@@ -242,8 +242,9 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
     $piprapay_favicon= 'https://piprapay.com/assets/images/favicon.png';
     $piprapay_logo_light = 'https://cdn.piprapay.com/media/logo.png';
 
-    $directory = (pp_site_url('fulldomain') == 'http://localhost') ? 'piprapay-panel/' : '';
-    $site_url = pp_site_url('fulldomain').'/'.$directory;
+    $scriptDir = trim(dirname($_SERVER['SCRIPT_NAME'] ?? ''), '/\\');
+    $directory = !empty($scriptDir) ? $scriptDir . '/' : '';
+    $site_url = pp_site_url('fulldomain') . '/' . $directory;
 
     if(isset($_GET['logout'])){
         logoutCookie();
@@ -5653,27 +5654,51 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $otp = generateItemID();
+                    $companionInfo = getCompanionBaseUrlInfo();
+                    $companionBaseUrl = $companionInfo['url'];
+                    $isLocalhost = $companionInfo['is_localhost'];
+
+                    ensureDeviceTableColumns();
 
                     $response_brand = json_decode(getData($db_prefix.'device','WHERE status = "processing" AND d_id = "'.$pp_admin.'"'),true);
-                    if($response_brand['status'] == true){
-                        $columns = ['otp', 'updated_date'];
-                        $values = [$otp, getCurrentDatetime('Y-m-d H:i:s')];
-                        $condition = "id = '".$response_brand['response'][0]['id']."'"; 
-                        
-                        updateData($db_prefix.'device', $columns, $values, $condition);
 
-                        echo json_encode(['status' => 'true', 'otp' => $otp, 'csrf_token' => $new_csrf_token]);
-                    }else{
+                    $now = time();
+                    if ($response_brand['status'] == true && !empty($response_brand['response'])) {
+                        $row = $response_brand['response'][0];
+                        $exp = isset($row['otp_expires_at']) ? (int)$row['otp_expires_at'] : 0;
+                        if ($exp > $now && !empty($row['otp'])) {
+                            $otp = $row['otp'];
+                            $expiresAt = $exp;
+                        } else {
+                            $otp = sprintf('%06d', random_int(100000, 999999));
+                            $expiresAt = $now + 300;
+
+                            $columns = ['otp', 'otp_expires_at', 'updated_date'];
+                            $values = [$otp, (string)$expiresAt, getCurrentDatetime('Y-m-d H:i:s')];
+                            $condition = "id = '".$row['id']."'"; 
+                            
+                            updateData($db_prefix.'device', $columns, $values, $condition);
+                        }
+                    } else {
+                        $otp = sprintf('%06d', random_int(100000, 999999));
+                        $expiresAt = $now + 300;
                         $device_id = generateItemID();
 
-                        $columns = ['d_id', 'device_id', 'otp', 'created_date', 'updated_date'];
-                        $values = [$pp_admin, $device_id, $otp, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
+                        $columns = ['d_id', 'device_id', 'otp', 'otp_expires_at', 'status', 'created_date', 'updated_date'];
+                        $values = [$pp_admin, $device_id, $otp, (string)$expiresAt, 'processing', getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
 
                         insertData($db_prefix.'device', $columns, $values);
-
-                        echo json_encode(['status' => 'true', 'otp' => $otp, 'csrf_token' => $new_csrf_token]);
                     }
+
+                    echo json_encode([
+                        'status' => 'true',
+                        'otp' => $otp,
+                        'base_url' => $companionBaseUrl,
+                        'is_localhost' => $isLocalhost,
+                        'expires_at' => $expiresAt,
+                        'message' => $isLocalhost ? "Your PipraPay installation is currently using localhost. A physical mobile device cannot reach localhost directly. Open PipraPay using your computer's LAN IP or use an HTTPS public URL to test Companion pairing." : "",
+                        'csrf_token' => $new_csrf_token
+                    ]);
                 }else{
                     echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => 'Invalid request' , 'csrf_token' => $new_csrf_token]);
                 }
@@ -9161,23 +9186,48 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     $app_version = escape_string($_POST['app_version'] ?? '');
 
                     if($onetimepassword == ""){
+                        error_log("PipraPay Companion Login Failed: Missing OTP (IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown') . ")");
                         echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Please fill in all required fields before proceeding.']);
                     }else{
+                        ensureDeviceTableColumns();
                         $params = [ ':otp' => $onetimepassword ];
 
-                        $response = json_decode(getData($db_prefix.'device','WHERE otp = :otp', '* FROM', $params),true);
-                        if($response['status'] == true){
-                            $otp_new = generateItemID();
+                        $response = json_decode(getData($db_prefix.'device','WHERE otp = :otp AND status = "processing"', '* FROM', $params),true);
+                        if($response['status'] == true && !empty($response['response'])){
+                            $deviceRow = $response['response'][0];
 
-                            $columns = ['otp', 'name', 'model', 'android_level', 'app_version', 'status', 'updated_date'];
-                            $values = [$otp_new, $name, $model, $android_level, $app_version, 'used', getCurrentDatetime('Y-m-d H:i:s')];
+                            $expiresAt = isset($deviceRow['otp_expires_at']) ? (int)$deviceRow['otp_expires_at'] : 0;
+                            $updatedTime = strtotime($deviceRow['updated_date'] ?? $deviceRow['created_date'] ?? '');
 
-                            $condition = "id = '".$response['response'][0]['id']."'"; 
-                            
-                            updateData($db_prefix.'device', $columns, $values, $condition);
+                            $isExpired = false;
+                            if ($expiresAt > 0) {
+                                if (time() > $expiresAt) {
+                                    $isExpired = true;
+                                }
+                            } elseif ($updatedTime > 0) {
+                                if ((time() - $updatedTime) > 300) {
+                                    $isExpired = true;
+                                }
+                            }
 
-                            echo json_encode(['status' => "true", 'token' => $otp_new]);
+                            if ($isExpired) {
+                                error_log("PipraPay Companion Login Failed: OTP Expired (IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown') . ", Device Name: " . $name . ")");
+                                echo json_encode(['status' => "false", 'title' => 'Expired OTP', 'message' => 'The One-Time Password has expired. Please generate a new QR code or OTP.']);
+                            } else {
+                                $token_new = bin2hex(random_bytes(32));
+                                $token_hash = hash('sha256', $token_new);
+
+                                $columns = ['otp', 'token', 'token_hash', 'name', 'model', 'android_level', 'app_version', 'status', 'updated_date'];
+                                $values = ['', $token_new, $token_hash, $name, $model, $android_level, $app_version, 'used', getCurrentDatetime('Y-m-d H:i:s')];
+
+                                $condition = "id = '".$deviceRow['id']."'"; 
+                                
+                                updateData($db_prefix.'device', $columns, $values, $condition);
+
+                                echo json_encode(['status' => "true", 'token' => $token_new]);
+                            }
                         }else{
+                            error_log("PipraPay Companion Login Failed: Invalid OTP or Device Not Processing (IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown') . ", Device Name: " . $name . ")");
                             echo json_encode(['status' => "false", 'title' => 'Invalid Credentials', 'message' => 'Please enter the correct credentials or scan the QR code again.']);
                         }
                     }
@@ -9193,10 +9243,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     if($token == ""){
                         echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Please fill in all required fields before proceeding.']);
                     }else{
-                        $params = [ ':otp' => $token, ':status' => 'used' ];
-
-                        $response = json_decode(getData($db_prefix.'device','WHERE otp = :otp AND status = :status', '* FROM', $params),true);
-                        if($response['status'] == true){
+                        $response = authenticateCompanionDeviceToken($token);
+                        if($response !== false && $response['status'] == true){
                             $params = [ ':cookie' => $response['response'][0]['d_id'] ];
 
                             $responseLog = json_decode(getData($db_prefix.'browser_log','WHERE cookie = :cookie', '* FROM', $params),true);
@@ -9294,10 +9342,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     if($token == ""){
                         echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Please fill in all required fields before proceeding.']);
                     }else{
-                        $params = [ ':otp' => $token, ':status' => 'used' ];
-
-                        $response = json_decode(getData($db_prefix.'device','WHERE otp = :otp AND status = :status', '* FROM', $params),true);
-                        if($response['status'] == true){
+                        $response = authenticateCompanionDeviceToken($token);
+                        if($response !== false && $response['status'] == true){
                             $sms_list = json_decode($sms_list_raw, true);
 
                             foreach ($sms_list as $sms) {
@@ -9551,10 +9597,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     if($token == ""){
                         echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Please fill in all required fields before proceeding.']);
                     }else{
-                        $params = [ ':otp' => $token, ':status' => 'used' ];
-
-                        $response = json_decode(getData($db_prefix.'device','WHERE otp = :otp AND status = :status', '* FROM', $params),true);
-                        if($response['status'] == true){
+                        $response = authenticateCompanionDeviceToken($token);
+                        if($response !== false && $response['status'] == true){
                             $senders = senderWhitelist(null, null, 'senders');
 
                             echo json_encode(["status" => "true","senders" => $senders], JSON_PRETTY_PRINT);
@@ -9577,10 +9621,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     if($token == ""){
                         echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Please fill in all required fields before proceeding.']);
                     }else{
-                        $params = [ ':otp' => $token, ':status' => 'used' ];
-
-                        $response = json_decode(getData($db_prefix.'device','WHERE otp = :otp AND status = :status', '* FROM', $params),true);
-                        if($response['status'] == true){
+                        $response = authenticateCompanionDeviceToken($token);
+                        if($response !== false && $response['status'] == true){
                             if($stored == "yes"){
                                 $condition = "device_id = '".$response['response'][0]['device_id']."' AND status = 'approved'"; 
                                 

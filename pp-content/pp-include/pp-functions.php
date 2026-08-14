@@ -13,9 +13,11 @@
     $pp_functions_loaded = true;
     
     function pp_site_url($type = "Full") {
-        // Detect protocol
-        $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off' 
-                    || $_SERVER['SERVER_PORT'] == 443) ? "https://" : "http://";
+        // Detect protocol with reverse proxy support
+        $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') 
+                    || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443)
+                    || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower($_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https');
+        $protocol = $isHttps ? "https://" : "http://";
 
         // Full host with subdomain
         $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
@@ -43,6 +45,132 @@
             default:
                 return $protocol . $host . $requestUri; // full URL
         }
+    }
+
+    function isLoopbackHost(?string $host): bool {
+        if (empty($host)) {
+            return true;
+        }
+        $host = strtolower(trim($host));
+        if ($host === 'localhost' || $host === '127.0.0.1' || $host === '::1' || $host === '[::1]') {
+            return true;
+        }
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
+            $ipLong = ip2long($host);
+            if ($ipLong !== false) {
+                $uIpLong = sprintf('%u', $ipLong);
+                $loopbackStart = sprintf('%u', ip2long('127.0.0.0'));
+                $loopbackEnd = sprintf('%u', ip2long('127.255.255.255'));
+                if ($uIpLong >= $loopbackStart && $uIpLong <= $loopbackEnd) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    function getCompanionBaseUrlInfo() {
+        $configUrl = '';
+        if (defined('COMPANION_BASE_URL') && !empty(COMPANION_BASE_URL)) {
+            $configUrl = COMPANION_BASE_URL;
+        } elseif (!empty(getenv('COMPANION_BASE_URL'))) {
+            $configUrl = getenv('COMPANION_BASE_URL');
+        }
+
+        if (!empty($configUrl)) {
+            $normalizedUrl = rtrim($configUrl, '/') . '/';
+            $host = parse_url($normalizedUrl, PHP_URL_HOST);
+            return [
+                'url' => $normalizedUrl,
+                'is_localhost' => isLoopbackHost($host)
+            ];
+        }
+
+        global $site_url;
+        if (!empty($site_url)) {
+            $normalizedUrl = rtrim($site_url, '/') . '/';
+            $host = parse_url($normalizedUrl, PHP_URL_HOST);
+            return [
+                'url' => $normalizedUrl,
+                'is_localhost' => isLoopbackHost($host)
+            ];
+        }
+
+        $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') 
+                    || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443)
+                    || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower($_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https');
+        $protocol = $isHttps ? "https://" : "http://";
+        $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+        $scriptDir = trim(dirname($_SERVER['SCRIPT_NAME'] ?? ''), '/\\');
+        $path = !empty($scriptDir) ? '/' . $scriptDir : '';
+        
+        if (preg_match('#/admin$#i', $path)) {
+            $path = preg_replace('#/admin$#i', '', $path);
+        }
+
+        $normalizedUrl = rtrim($protocol . $host . $path, '/') . '/';
+        $parsedHost = parse_url($normalizedUrl, PHP_URL_HOST);
+
+        return [
+            'url' => $normalizedUrl,
+            'is_localhost' => isLoopbackHost($parsedHost)
+        ];
+    }
+
+    function getCompanionBaseUrl() {
+        $info = getCompanionBaseUrlInfo();
+        if ($info['is_localhost']) {
+            return false;
+        }
+        return $info['url'];
+    }
+
+    function ensureDeviceTableColumns() {
+        static $migrated = false;
+        if ($migrated) return;
+        global $db_prefix;
+        try {
+            $pdo = connectDatabase();
+            $tableName = $db_prefix . 'device';
+            $stmt = $pdo->query("SHOW COLUMNS FROM `{$tableName}`");
+            $columns = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+            if (!in_array('token', $columns)) {
+                $pdo->exec("ALTER TABLE `{$tableName}` ADD COLUMN `token` text NULL AFTER `otp`");
+            }
+            if (!in_array('token_hash', $columns)) {
+                $pdo->exec("ALTER TABLE `{$tableName}` ADD COLUMN `token_hash` varchar(64) NULL AFTER `token`");
+            }
+            if (!in_array('otp_expires_at', $columns)) {
+                $pdo->exec("ALTER TABLE `{$tableName}` ADD COLUMN `otp_expires_at` varchar(20) NULL AFTER `token_hash`");
+            }
+            $migrated = true;
+        } catch (Throwable $e) {
+            // Silently catch
+        }
+    }
+
+    function authenticateCompanionDeviceToken(string $token) {
+        global $db_prefix;
+        if (empty($token)) {
+            return false;
+        }
+        ensureDeviceTableColumns();
+        $tokenEscaped = escape_string($token);
+        $tokenHash = hash('sha256', $token);
+
+        $params = [
+            ':token' => $tokenEscaped,
+            ':token_hash' => $tokenHash,
+            ':otp_token' => $tokenEscaped,
+            ':status' => 'used'
+        ];
+
+        $response = json_decode(getData($db_prefix.'device', 'WHERE (token = :token OR token_hash = :token_hash OR otp = :otp_token) AND status = :status', '* FROM', $params), true);
+        if (is_array($response) && isset($response['status']) && $response['status'] == true && !empty($response['response'])) {
+            return $response;
+        }
+        return false;
     }
 
     function getAdminPath($url) {

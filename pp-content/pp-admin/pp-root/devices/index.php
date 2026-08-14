@@ -214,14 +214,14 @@
                     </div>
                 </div>
 
-                <p class="mt-3">Or connect manually using your credentials:</p> 
+                <div id="companion-url-alert"></div>
 
                 <!-- Manual Connection Inputs -->
                 <div class="form-group mt-2">
                     <label for="base-url" class="form-label">Base URL <span class="text-danger">*</span></label>
                     <div class="form-control-wrap">
                         <div class="input-group">
-                            <input type="text" class="form-control" id="base-url" name="base-url" placeholder="https://yourdomain.com" value="<?php echo $site_url ?>" readonly>
+                            <input type="text" class="form-control" id="base-url" name="base-url" placeholder="https://yourdomain.com" value="<?php echo $site_url ?>">
 
                             <button class="btn border bg-light btn-color-dark btn-hover-primary btn-icon btn-soft" type="button" onclick="copyBaseUrl()">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-copy"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666" /><path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1" /></svg>
@@ -257,28 +257,83 @@
 
 
 <script data-cfasync="false">
-    function iniModelConnectDevice(){
+    function validateAndRenderQR(){
         var model = document.querySelector("#modal-createItem");
-        var baseUrl = model.querySelector("#base-url").value;
-        var pass = model.querySelector("#one-time-password").value;
+        if (!model) return;
+        var baseUrlInput = model.querySelector("#base-url");
+        var rawUrl = (baseUrlInput ? baseUrlInput.value || '' : '').trim();
+        var passInput = model.querySelector("#one-time-password");
+        var pass = (passInput ? passInput.value || '' : '').trim();
+        var loadingContainer = model.querySelector('.loading-process');
+        var alertContainer = model.querySelector('#companion-url-alert');
 
-        var text = baseUrl+'----'+pass;
+        if (!rawUrl || !pass) {
+            if (loadingContainer) {
+                loadingContainer.innerHTML = '<div class="alert alert-secondary text-center mb-0 p-3" role="alert">Use a LAN IP or public HTTPS URL to generate QR.</div>';
+            }
+            return;
+        }
 
-        model.querySelector('#qrcode').innerHTML = "";
-        qr = new QRCode(model.querySelector('#qrcode'), {
-            text: text,
-            width: 200,
-            height: 200
-        });
+        var urlObj = null;
+        try {
+            urlObj = new URL(rawUrl);
+        } catch (e) {
+            if (loadingContainer) {
+                loadingContainer.innerHTML = '<div class="alert alert-warning text-center mb-0 p-3" role="alert">Enter a valid HTTP or HTTPS Base URL to generate QR.</div>';
+            }
+            return;
+        }
+
+        if (urlObj.protocol !== 'http:' && urlObj.protocol !== 'https:') {
+            if (loadingContainer) {
+                loadingContainer.innerHTML = '<div class="alert alert-danger text-center mb-0 p-3" role="alert">Only HTTP and HTTPS URLs are supported.</div>';
+            }
+            return;
+        }
+
+        var hostname = (urlObj.hostname || '').toLowerCase();
+        var isLoopback = (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]' || hostname.startsWith('127.'));
+
+        if (isLoopback) {
+            if (alertContainer) {
+                alertContainer.innerHTML = '<div class="alert alert-warning text-start mb-3" role="alert"><p class="m-0">Your PipraPay installation is currently using localhost. A physical mobile device cannot reach localhost directly. Open PipraPay using your computer\'s LAN IP or use an HTTPS public URL to test Companion pairing.</p></div>';
+            }
+            if (loadingContainer) {
+                loadingContainer.innerHTML = '<div class="alert alert-secondary text-center mb-0 p-3" role="alert">Use a LAN IP or public HTTPS URL to generate QR.</div>';
+            }
+        } else {
+            if (alertContainer) {
+                alertContainer.innerHTML = '';
+            }
+            var cleanUrl = rawUrl;
+            if (!cleanUrl.endsWith('/')) {
+                cleanUrl += '/';
+            }
+            var text = cleanUrl + '----' + pass;
+
+            if (loadingContainer) {
+                loadingContainer.innerHTML = '<div id="qrcode" class="d-flex justify-content-center"></div>';
+                new QRCode(loadingContainer.querySelector('#qrcode'), {
+                    text: text,
+                    width: 200,
+                    height: 200
+                });
+            }
+        }
+    }
+
+    function iniModelConnectDevice(){
+        validateAndRenderQR();
     }
 
     function iniConnectDeviceInfo(){
         var csrf_token_default = $('input[name="csrf_token_default"]').val();
-
-        // Get modal element
         var model = document.querySelector("#modal-createItem");
 
         model.querySelector("#one-time-password").value = '';
+        model.querySelector("#base-url").value = '';
+        var alertContainer = model.querySelector('#companion-url-alert');
+        if (alertContainer) alertContainer.innerHTML = '';
 
         model.querySelector('.loading-process').innerHTML = '<div class="spinner-border spinner-border-md text-primary" role="status"><span class="visually-hidden">Loading...</span></div>';
 
@@ -296,32 +351,26 @@
                 });
 
                 if (response.status === 'true') {
+                    model.querySelector("#base-url").value = response.base_url;
                     model.querySelector("#one-time-password").value = response.otp;
 
-                    model.querySelector('.loading-process').innerHTML = '<div id="qrcode"></div>';
-
-                    iniModelConnectDevice();
+                    validateAndRenderQR();
                 } else {
-                    createToast({
-                        title: response.title,
-                        description: response.message,
-                        svg: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d63939" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-exclamation-circle"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M12 9v4" /><path d="M12 16v.01" /></svg>`,
-                        timeout: 6000,
-                        top: 70
-                    });
+                    var errorMsg = response.message || 'Unable to load connection details.';
+                    model.querySelector('.loading-process').innerHTML = '<div class="alert alert-warning text-start mb-0" role="alert"><p class="m-0"><strong>' + (response.title || 'Notice') + ':</strong> ' + errorMsg + '</p></div>';
                 }
             },
             error: function (xhr, status, error) {
-                createToast({
-                    title: 'Something Wrong!',
-                    description: 'For further assistance, please contact our support team.',
-                    svg: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d63939" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-exclamation-circle"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M12 9v4" /><path d="M12 16v.01" /></svg>`,
-                    timeout: 6000,
-                    top: 70
-                });
+                model.querySelector('.loading-process').innerHTML = '<div class="alert alert-danger text-start mb-0" role="alert"><p class="m-0">Something went wrong while fetching connection info.</p></div>';
             }
         });
     }
+
+    $(document).ready(function(){
+        $(document).on('input keyup change', '#base-url', function(){
+            validateAndRenderQR();
+        });
+    });
 
     function copyBaseUrl(){
         var model = document.querySelector("#modal-createItem");
