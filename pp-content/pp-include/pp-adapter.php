@@ -9169,24 +9169,50 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
         exit();
     }
 
-    if(isset($_POST['action-companion'])){
-        $action = escape_string($_POST['action-companion'] ?? '');
+    if (empty($_POST) && (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' || ($_SERVER['REQUEST_METHOD'] ?? '') === 'PUT')) {
+        $rawInput = file_get_contents('php://input');
+        if (!empty($rawInput)) {
+            $decoded = json_decode($rawInput, true);
+            if (is_array($decoded)) {
+                $_POST = $decoded;
+            }
+        }
+    }
+
+    $companionAction = $_POST['action-companion'] ?? $_POST['action_companion'] ?? $_POST['action'] ?? $_REQUEST['action-companion'] ?? $_REQUEST['action_companion'] ?? $_REQUEST['action'] ?? '';
+    $isCompanionRequest = !empty($_POST['action-companion']) 
+        || !empty($_POST['action_companion']) 
+        || in_array($companionAction, ['login', 'account-information', 'sms-transmit-bulk', 'sms-transmit-sender', 'delete-sms-data', 'companion_login', 'companion_auth'])
+        || isset($_POST['onetimepassword']) || isset($_POST['one_time_password']) || isset($_POST['otp']);
+
+    if($isCompanionRequest){
+        $action = escape_string($companionAction);
+        if ($action === 'companion_login') {
+            $action = 'login';
+        }
+
+        $reqUri = $_SERVER['REQUEST_URI'] ?? 'unknown';
+        $reqMethod = $_SERVER['REQUEST_METHOD'] ?? 'unknown';
+        $clientIp = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+        $safeActionLog = preg_replace('/[^a-zA-Z0-9_-]/', '', $action);
 
         if($action == ""){
+            error_log("[Companion API Log] Method: {$reqMethod} | URI: {$reqUri} | Action: empty | Status: 400_FAILED | IP: {$clientIp}");
             echo json_encode(['status' => "false", 'title' => 'Oops! Something went wrong', 'message' => 'Your request could not be processed. Please try again.']);
         }else{
             if($action == "login"){
                 if (!empty($pp_demo_mode)) {
+                    error_log("[Companion API Log] Method: {$reqMethod} | URI: {$reqUri} | Action: login | Status: DEMO_RESTRICTED | IP: {$clientIp}");
                     echo json_encode(['status' => "false", 'title' => 'Demo Restriction', 'message' => 'This feature is disabled in the demo version.']);
                 }else{
-                    $onetimepassword = escape_string($_POST['onetimepassword'] ?? '');
-                    $name = escape_string($_POST['name'] ?? '');
-                    $model = escape_string($_POST['model'] ?? '');
-                    $android_level = escape_string($_POST['android_level'] ?? '');
-                    $app_version = escape_string($_POST['app_version'] ?? '');
+                    $onetimepassword = escape_string($_POST['onetimepassword'] ?? $_POST['one_time_password'] ?? $_POST['otp'] ?? $_POST['password'] ?? $_POST['code'] ?? '');
+                    $name = escape_string($_POST['name'] ?? $_POST['device_name'] ?? $_POST['deviceName'] ?? 'Companion Device');
+                    $model = escape_string($_POST['model'] ?? $_POST['device_model'] ?? $_POST['deviceModel'] ?? 'Android');
+                    $android_level = escape_string($_POST['android_level'] ?? $_POST['android_version'] ?? $_POST['androidVersion'] ?? $_POST['sdk'] ?? '30');
+                    $app_version = escape_string($_POST['app_version'] ?? $_POST['appVersion'] ?? $_POST['version'] ?? '1.0.0');
 
                     if($onetimepassword == ""){
-                        error_log("PipraPay Companion Login Failed: Missing OTP (IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown') . ")");
+                        error_log("[Companion API Log] Method: {$reqMethod} | URI: {$reqUri} | Action: login | Status: MISSING_OTP | IP: {$clientIp}");
                         echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Please fill in all required fields before proceeding.']);
                     }else{
                         ensureDeviceTableColumns();
@@ -9211,7 +9237,7 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             }
 
                             if ($isExpired) {
-                                error_log("PipraPay Companion Login Failed: OTP Expired (IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown') . ", Device Name: " . $name . ")");
+                                error_log("[Companion API Log] Method: {$reqMethod} | URI: {$reqUri} | Action: login | Status: EXPIRED_OTP | IP: {$clientIp}");
                                 echo json_encode(['status' => "false", 'title' => 'Expired OTP', 'message' => 'The One-Time Password has expired. Please generate a new QR code or OTP.']);
                             } else {
                                 $token_new = bin2hex(random_bytes(32));
@@ -9224,10 +9250,12 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                 
                                 updateData($db_prefix.'device', $columns, $values, $condition);
 
+                                error_log("[Companion API Log] Method: {$reqMethod} | URI: {$reqUri} | Action: login | Status: SUCCESS_PAIRED | IP: {$clientIp}");
+
                                 echo json_encode(['status' => "true", 'token' => $token_new]);
                             }
                         }else{
-                            error_log("PipraPay Companion Login Failed: Invalid OTP or Device Not Processing (IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown') . ", Device Name: " . $name . ")");
+                            error_log("[Companion API Log] Method: {$reqMethod} | URI: {$reqUri} | Action: login | Status: INVALID_OTP | IP: {$clientIp}");
                             echo json_encode(['status' => "false", 'title' => 'Invalid Credentials', 'message' => 'Please enter the correct credentials or scan the QR code again.']);
                         }
                     }
@@ -9236,11 +9264,13 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
             if($action == "account-information"){
                 if (!empty($pp_demo_mode)) {
+                    error_log("[Companion API Log] Method: {$reqMethod} | URI: {$reqUri} | Action: account-information | Status: DEMO_RESTRICTED | IP: {$clientIp}");
                     echo json_encode(['status' => "false", 'title' => 'Demo Restriction', 'message' => 'This feature is disabled in the demo version.']);
                 }else{
-                    $token = escape_string($_POST['token'] ?? '');
+                    $token = escape_string($_POST['token'] ?? $_POST['device_token'] ?? $_POST['deviceToken'] ?? '');
 
                     if($token == ""){
+                        error_log("[Companion API Log] Method: {$reqMethod} | URI: {$reqUri} | Action: account-information | Status: MISSING_TOKEN | IP: {$clientIp}");
                         echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Please fill in all required fields before proceeding.']);
                     }else{
                         $response = authenticateCompanionDeviceToken($token);
