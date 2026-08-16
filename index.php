@@ -409,16 +409,6 @@
                                 $webhookUrl    = $data['webhook_url'] ?? '';
                                 $metadataRaw   = $data['metadata'] ?? '{}';
 
-                                function getDomainFromUrl($url) {
-                                    // Check if it's a valid URL
-                                    if (filter_var($url, FILTER_VALIDATE_URL)) {
-                                        // Parse the URL to get host
-                                        $parsed = parse_url($url, PHP_URL_HOST);
-                                        return $parsed;
-                                    }
-                                    return false; // Invalid URL
-                                }
-
                                 if($returnUrl == ""){
                                     $returnUrl = '--';
                                 }else{
@@ -601,7 +591,18 @@
                                     $columns = ['brand_id', 'ref', 'customer_info', 'amount', 'currency', 'metadata', 'return_url', 'webhook_url', 'created_date', 'updated_date'];
                                     $values = [$response_api['response'][0]['brand_id'], $payment_id, $customerInfoJson, money_sanitize($amount), $currency, json_encode($metadata), $returnUrl, $webhookUrl, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
 
-                                    insertData($db_prefix.'transaction', $columns, $values);
+                                    $insertedPaymentId = insertTransactionRecord($columns, $values, 1);
+                                    if ($insertedPaymentId === false) {
+                                        http_response_code(500);
+                                        echo json_encode([
+                                            'error' => [
+                                                'code' => 'TRANSACTION_CREATION_FAILED',
+                                                'message' => 'Failed to create transaction record. Please try again.'
+                                            ]
+                                        ]);
+                                        exit;
+                                    }
+                                    $payment_id = $insertedPaymentId;
 
                                     $params = [ ':brand_id' => $response_api['response'][0]['brand_id'], ':email' => $email ];
 
@@ -636,8 +637,55 @@
                                     $webhookUrl    = $data['webhook_url'] ?? '--';
                                     $metadataRaw   = $data['metadata'] ?? '{}';
 
-                                    if($webhookUrl == ""){
+                                    if ($webhookUrl === '' || $webhookUrl === '--') {
                                         $webhookUrl = '--';
+                                    } else {
+                                        if (!is_safe_webhook_url($webhookUrl)) {
+                                            http_response_code(400);
+                                            echo json_encode([
+                                                'error' => [
+                                                    'code' => 'INVALID_URL',
+                                                    'message' => 'Webhook URL is invalid or unsafe.'
+                                                ]
+                                            ]);
+                                            exit;
+                                        }
+                                        $webhookDomain = getDomainFromUrl($webhookUrl);
+                                        if (!$webhookDomain) {
+                                            http_response_code(400);
+                                            echo json_encode([
+                                                'error' => [
+                                                    'code' => 'INVALID_URL',
+                                                    'message' => 'Webhook URL is invalid.'
+                                                ]
+                                            ]);
+                                            exit;
+                                        }else{
+                                            $params = [ ':domain' => $webhookDomain ];
+
+                                            $response_urlCheck = json_decode(getData($db_prefix.'domain','WHERE domain = :domain', '* FROM', $params),true);
+                                            if($response_urlCheck['status'] == true){
+                                                if($response_urlCheck['response'][0]['status'] !== "active"){
+                                                    http_response_code(400);
+                                                    echo json_encode([
+                                                        'error' => [
+                                                            'code' => 'INVALID_URL',
+                                                            'message' => 'The Webhook URL ("'.$webhookDomain.'") is whitelisted but not active. Please activate this domain in the "Domains" section to proceed.'
+                                                        ]
+                                                    ]);
+                                                    exit;
+                                                }
+                                            }else{
+                                                http_response_code(400);
+                                                echo json_encode([
+                                                    'error' => [
+                                                        'code' => 'INVALID_URL',
+                                                        'message' => 'The provided Webhook URL ("'.$webhookDomain.'") is not whitelisted. Please add this domain in the "Domains" section to continue.'
+                                                    ]
+                                                ]);
+                                                exit;
+                                            }
+                                        }
                                     }
 
                                     if (is_string($metadataRaw)) {
@@ -739,7 +787,18 @@
                                         $columns = ['brand_id', 'ref', 'customer_info', 'amount', 'currency', 'metadata', 'webhook_url', 'created_date', 'updated_date'];
                                         $values = [$response_api['response'][0]['brand_id'], $payment_id, $customerInfoJson, money_sanitize($amount), $currency, json_encode($metadata), $webhookUrl, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
 
-                                        insertData($db_prefix.'transaction', $columns, $values);
+                                        $insertedPaymentId = insertTransactionRecord($columns, $values, 1);
+                                        if ($insertedPaymentId === false) {
+                                            http_response_code(500);
+                                            echo json_encode([
+                                                'error' => [
+                                                    'code' => 'TRANSACTION_CREATION_FAILED',
+                                                    'message' => 'Failed to create transaction record. Please try again.'
+                                                ]
+                                            ]);
+                                            exit;
+                                        }
+                                        $payment_id = $insertedPaymentId;
 
                                         $params = [ ':brand_id' => $response_api['response'][0]['brand_id'], ':email' => $email ];
 
@@ -806,9 +865,9 @@
                                     ]);
                                     exit;
                                 }else{
-                                    $params = [ ':ref' => $pp_id ];
+                                    $params = [ ':ref' => $pp_id, ':brand_id' => $response_api['response'][0]['brand_id'] ];
 
-                                    $response_transaction = json_decode(getData($db_prefix.'transaction','WHERE ref = :ref', '* FROM', $params),true);
+                                    $response_transaction = json_decode(getData($db_prefix.'transaction','WHERE ref = :ref AND brand_id = :brand_id', '* FROM', $params),true);
                                     if($response_transaction['status'] == true){
                                             $metadata = json_decode($response_transaction['response'][0]['metadata'], true) ?: [];
 
@@ -888,9 +947,9 @@
                                         ]);
                                         exit;
                                     }else{
-                                        $params = [ ':ref' => $pp_id ];
+                                        $params = [ ':ref' => $pp_id, ':brand_id' => $response_api['response'][0]['brand_id'] ];
 
-                                        $response_transaction = json_decode(getData($db_prefix.'transaction','WHERE ref = :ref', '* FROM', $params),true);
+                                        $response_transaction = json_decode(getData($db_prefix.'transaction','WHERE ref = :ref AND brand_id = :brand_id', '* FROM', $params),true);
                                         if($response_transaction['status'] == true){
                                             if (($response_transaction['response'][0]['status'] ?? '') !== 'completed') {
                                                 http_response_code(400);
@@ -909,27 +968,35 @@
                                             $params = [ ':gateway_id' => $transactionRow['gateway_id'], ':brand_id' => $transactionRow['brand_id'] ];
                                             $response_gateway_info = json_decode(getData($db_prefix.'gateways','WHERE gateway_id = :gateway_id AND brand_id = :brand_id', '* FROM', $params),true);
                                             $gateway_slug = $response_gateway_info['response'][0]['slug'] ?? '';
+                                             if ($gateway_slug !== 'bkash-api-tokenized') {
+                                                 http_response_code(400);
+                                                 echo json_encode([
+                                                     'error' => [
+                                                         'code' => 'REFUND_UNSUPPORTED',
+                                                         'message' => 'Refund is not supported for this gateway.'
+                                                     ]
+                                                 ]);
+                                                 exit;
+                                             }
 
-                                            if ($gateway_slug === 'bkash-api-tokenized') {
-                                                $refundPayload = [
-                                                    'amount' => money_round($transactionRow['local_net_amount']),
-                                                    'sku' => $transactionRow['ref'],
-                                                    'reason' => 'API refund'
-                                                ];
+                                             $refundPayload = [
+                                                 'amount' => money_round($transactionRow['local_net_amount']),
+                                                 'sku' => $transactionRow['ref'],
+                                                 'reason' => 'API refund'
+                                             ];
 
-                                                $refundResult = pp_bkash_tokenized_refund($transactionRow, $refundPayload);
+                                             $refundResult = pp_bkash_tokenized_refund($transactionRow, $refundPayload);
 
-                                                if (empty($refundResult['status'])) {
-                                                    http_response_code(400);
-                                                    echo json_encode([
-                                                        'error' => [
-                                                            'code' => 'REFUND_FAILED',
-                                                            'message' => $refundResult['message'] ?? 'Refund failed.'
-                                                        ]
-                                                    ]);
-                                                    exit;
-                                                }
-                                            }
+                                             if (empty($refundResult['status'])) {
+                                                 http_response_code(400);
+                                                 echo json_encode([
+                                                     'error' => [
+                                                         'code' => 'REFUND_FAILED',
+                                                         'message' => $refundResult['message'] ?? 'Refund failed.'
+                                                     ]
+                                                 ]);
+                                                 exit;
+                                             } 
 
                                             $source_info = json_decode($transactionRow['source_info'], true) ?: [];
                                             $source_info_changed = false;
@@ -1834,25 +1901,49 @@
                                 $response_pending_transaciton = json_decode(getData($db_prefix.'transaction','WHERE status = "pending" AND sender_key NOT IN ("--", "") ORDER BY 1 DESC'), true);
                                 $all_transactions = [];
                                 foreach($response_pending_transaciton['response'] as $row){
-                                    $params = [ ':sender_key' => $row['sender_key'], ':type' => $row['sender_type'], ':trx_id' => $row['trx_id'], ':status' => 'approved' ];
+$params = [ ':sender_key' => $row['sender_key'], ':type' => $row['sender_type'], ':trx_id' => $row['trx_id'], ':status' => 'approved' ];
 
                                     $response_pending_SMSTransaction = json_decode(getData($db_prefix.'sms_data','WHERE sender_key = :sender_key AND type = :type AND trx_id = :trx_id AND status = :status', '* FROM', $params), true);
                                     if($response_pending_SMSTransaction['status'] == true){
 
                                         $response_brand = json_decode(getData($db_prefix.'brands',' WHERE brand_id ="'.$row['brand_id'].'"'),true);
                                         if($response_brand['status'] == true){
-                                            if (verifyPaymentTolerance($row['local_net_amount'], $response_pending_SMSTransaction['response'][0]['amount'], $response_brand['response'][0]['payment_tolerance'])) {
-                                                    $columns = ['status', 'updated_date'];
-                                                    $values = ['used', getCurrentDatetime('Y-m-d H:i:s')];
-                                                    $condition = 'id ="'.$response_pending_SMSTransaction['response'][0]['id'].'"'; 
-                                                    
-                                                    updateData($db_prefix.'sms_data', $columns, $values, $condition);
+                                             if (verifyPaymentTolerance($row['local_net_amount'], $response_pending_SMSTransaction['response'][0]['amount'], $response_brand['response'][0]['payment_tolerance'])) {
+                                                     $pdo_recon = connectDatabase();
+                                                     $pdo_recon->beginTransaction();
 
-                                                    $columns = ['status', 'sender', 'trx_id', 'updated_date'];
-                                                    $values = ['completed', $response_pending_SMSTransaction['response'][0]['number'], $row['trx_id'], getCurrentDatetime('Y-m-d H:i:s')];
-                                                    $condition = 'id ="'.$row['id'].'"'; 
+                                                     try {
+                                                         $stmt_sms = $pdo_recon->prepare("UPDATE `{$db_prefix}sms_data` SET `status` = 'used', `updated_date` = :updated WHERE `id` = :id AND `status` = 'approved'");
+                                                         $stmt_sms->execute([
+                                                             ':updated' => getCurrentDatetime('Y-m-d H:i:s'),
+                                                             ':id'      => $response_pending_SMSTransaction['response'][0]['id']
+                                                         ]);
 
-                                                    updateData($db_prefix.'transaction', $columns, $values, $condition);
+                                                         if ($stmt_sms->rowCount() !== 1) {
+                                                             $pdo_recon->rollBack();
+                                                             continue;
+                                                         }
+
+                                                         $stmt_tx = $pdo_recon->prepare("UPDATE `{$db_prefix}transaction` SET `status` = 'completed', `sender` = :sender, `trx_id` = :trx_id, `updated_date` = :updated WHERE `id` = :tx_id AND `status` = 'pending'");
+                                                         $stmt_tx->execute([
+                                                             ':sender'   => $response_pending_SMSTransaction['response'][0]['number'],
+                                                             ':trx_id'   => $row['trx_id'],
+                                                             ':updated'  => getCurrentDatetime('Y-m-d H:i:s'),
+                                                             ':tx_id'    => $row['id']
+                                                         ]);
+
+                                                         if ($stmt_tx->rowCount() !== 1) {
+                                                             $pdo_recon->rollBack();
+                                                             continue;
+                                                         }
+
+                                                         $pdo_recon->commit();
+                                                     } catch (Throwable $e) {
+                                                         if ($pdo_recon->inTransaction()) {
+                                                             $pdo_recon->rollBack();
+                                                         }
+                                                         continue;
+                                                     }
 
 
                                                     $metadata = json_decode($row['metadata'], true) ?: [];
@@ -1945,7 +2036,8 @@
                                         curl_setopt_array($ch, [
                                             CURLOPT_RETURNTRANSFER => true,
                                             CURLOPT_TIMEOUT => 10,
-                                            CURLOPT_SSL_VERIFYPEER => false
+                                            CURLOPT_SSL_VERIFYPEER => true,
+                                            CURLOPT_SSL_VERIFYHOST => 2
                                         ]);
 
                                         curl_multi_add_handle($multiHandle, $ch);

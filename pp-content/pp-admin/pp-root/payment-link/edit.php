@@ -22,9 +22,8 @@ if (!defined('PipraPay_INIT')) {
         http_response_code(403);
         exit('Invalid payment link id');
     }else{
-        $ref = escape_string($ref);
-
-        $response_paymentLink = json_decode(getData($db_prefix.'payment_link','WHERE ref = "'.$ref.'" AND brand_id = "'.$global_response_brand['response'][0]['brand_id'].'"'),true);
+        $queryParams = [':ref' => $ref, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+        $response_paymentLink = json_decode(getData($db_prefix.'payment_link','WHERE ref = :ref AND brand_id = :brand_id', '* FROM', $queryParams),true);
         if($response_paymentLink['status'] == true){
             $response_product_info = json_decode($response_paymentLink['response'][0]['product_info'], true);
         }else{
@@ -105,7 +104,7 @@ if (!defined('PipraPay_INIT')) {
                                         <div class="col-lg-8">
                                             <label for="username" class="form-label">Product Title <span class="text-danger">*</span></label>
                                             <div class="input-group">
-                                                <input type="text" class="form-control" name="title" placeholder="Product Title" required="" value="<?php echo $response_product_info['title']?>">
+                                                <input type="text" class="form-control" name="title" placeholder="Product Title" required="" value="<?php echo htmlspecialchars((string)($response_product_info['title'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')?>">
                                             </div>
                                         </div>
 
@@ -119,7 +118,7 @@ if (!defined('PipraPay_INIT')) {
                                         <div class="col-lg-12">
                                             <label for="username" class="form-label">Product Description <span class="text-danger">*</span></label>
                                             <div class="input-group">
-                                                <textarea name="description" class="form-control"><?php echo $response_product_info['description']?></textarea>
+                                                <textarea name="description" class="form-control"><?php echo htmlspecialchars((string)($response_product_info['description'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')?></textarea>
                                             </div>
                                         </div>
 
@@ -212,7 +211,7 @@ if (!defined('PipraPay_INIT')) {
                                                         <div class="form-group">
                                                             <label class="form-label">Field Name <span class="text-danger">*</span></label>
                                                             <div class="form-control-wrap">
-                                                                <input type="text" class="form-control" name="items[item-card-<?php echo $uniqueID?>][fieldName]" id="fieldName" placeholder="Enter field name" value="<?php echo $row['fieldName']?>" required>
+                                                                <input type="text" class="form-control" name="items[item-card-<?php echo $uniqueID?>][fieldName]" id="fieldName" placeholder="Enter field name" value="<?php echo htmlspecialchars((string)($row['fieldName'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')?>" required>
                                                             </div>
                                                         </div>
                                                     </div>
@@ -254,7 +253,7 @@ if (!defined('PipraPay_INIT')) {
                                                         <div class="form-group">
                                                             <label class="form-label">Add Options <span class="text-danger">*</span></label>
                                                             <div class="form-control-wrap">
-                                                                <input type="text" class="js-tags form-control" id="items[item-card-<?php echo $uniqueID?>][addOptions][]" value="<?php echo $row['value']?>" placeholder="Type and press Enter">
+                                                                <input type="text" class="js-tags form-control" id="items[item-card-<?php echo $uniqueID?>][addOptions][]" value="<?php echo htmlspecialchars((string)($row['value'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')?>" placeholder="Type and press Enter">
                                                             </div>
                                                         </div>
                                                     </div>

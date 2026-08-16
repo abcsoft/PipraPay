@@ -2,6 +2,9 @@ RewriteEngine On
 
 Options -Indexes
 
+# Explicitly block web access to .git repository files and folders
+RewriteRule (^|/)\.git - [F,L]
+
 RewriteCond %{THE_REQUEST} \s/+(.+?\.php)[\s?] [NC]
 RewriteCond %1 !^index\.php$
 RewriteRule ^ - [F,L]

@@ -23,9 +23,8 @@ if (!defined('PipraPay_INIT')) {
         http_response_code(403);
         exit('Invalid invoice id');
     }else{
-        $i_id = escape_string($i_id);
-
-        $response_invoice = json_decode(getData($db_prefix.'invoice','WHERE ref = "'.$i_id.'" AND brand_id = "'.$global_response_brand['response'][0]['brand_id'].'"'),true);
+        $queryParams = [':ref' => $i_id, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+        $response_invoice = json_decode(getData($db_prefix.'invoice','WHERE ref = :ref AND brand_id = :brand_id', '* FROM', $queryParams),true);
         if($response_invoice['status'] == true){
 
         }else{
@@ -112,7 +111,7 @@ if (!defined('PipraPay_INIT')) {
                                                         <?php
                                                                 $customer_info = json_decode($response_invoice['response'][0]['customer_info'], true);
                                                         ?>
-                                                        <option value="<?php echo $customer_info['id']?>" selected><?php echo $customer_info['name']?> - <?php echo $customer_info['email']?></option>
+                                                        <option value="<?php echo htmlspecialchars((string)($customer_info['id'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')?>" selected><?php echo htmlspecialchars((string)($customer_info['name'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')?> - <?php echo htmlspecialchars((string)($customer_info['email'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')?></option>
                                                     </select>
                                                 </div>
                                             </div>
@@ -185,7 +184,7 @@ if (!defined('PipraPay_INIT')) {
                                                             <label class="form-label">Description <span class="text-danger">*</span></label>
                                                             <div class="form-control-wrap">
                                                                 <input type="hidden"name="item-id" value="<?php echo $row['id']?>">
-                                                                <input type="text" class="form-control" name="item-description" value="<?php echo $row['description']?>" aria-label="" required>
+                                                                <input type="text" class="form-control" name="item-description" value="<?php echo htmlspecialchars((string)$row['description'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')?>" aria-label="" required>
                                                             </div>
                                                         </div>
                                                     </div>
@@ -251,7 +250,7 @@ if (!defined('PipraPay_INIT')) {
                                     <h3 class="card-title">Email Note</h3>
                                 </div>
                                 <div class="card-body p-4">
-                                    <textarea class="hugerte-textArea" name="private-note-content"><?php echo ($response_invoice['response'][0]['private_note'] === '--') ? '' : $response_invoice['response'][0]['private_note'];?></textarea>
+                                    <textarea class="hugerte-textArea" name="private-note-content"><?php echo htmlspecialchars((string)(($response_invoice['response'][0]['private_note'] === '--') ? '' : $response_invoice['response'][0]['private_note']), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');?></textarea>
                                 </div>
                             </div>
                         </div>
@@ -305,7 +304,7 @@ if (!defined('PipraPay_INIT')) {
                                 <div class="card-body">
                                     <div class="row g-3">
                                         <div class="col-lg-12">
-                                            <textarea name="note" class="form-control"><?php if($response_invoice['response'][0]['note'] !== "--"){ echo $response_invoice['response'][0]['note']; } ?></textarea>
+                                            <textarea name="note" class="form-control"><?php if($response_invoice['response'][0]['note'] !== "--"){ echo htmlspecialchars((string)$response_invoice['response'][0]['note'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); } ?></textarea>
                                         </div>
                                     </div>
                                 </div>

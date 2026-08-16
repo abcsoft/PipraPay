@@ -64,6 +64,8 @@
                 $pdo->commit();
             }
 
+            $ppTokenSecret = bin2hex(random_bytes(32));
+
             // Write config file
             $configContent = "<?php
     \$db_host = '".addslashes($host). "';
@@ -72,6 +74,7 @@
     \$db_pass = '".addslashes($password)."';
     \$db_name = '".addslashes($dbname)."';
     \$db_prefix = '".addslashes($tablePrefix)."';
+    \$pp_token_secret = '".addslashes($ppTokenSecret)."';
 ?>";
 
             file_put_contents(__DIR__ . '/../../pp-temp-config.php', $configContent);

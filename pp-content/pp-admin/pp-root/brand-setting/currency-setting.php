@@ -416,11 +416,11 @@ if (!defined('PipraPay_INIT')) {
                         }
 
                         html += `
-                            <tr ${border} data-id="${item.id}">
-                                <td>${item.code}</td>
-                                <td>${item.symbol}</td>
-                                <td>${item.rate}</td>
-                                <td>${item.updated_date}</td>
+                            <tr ${border} data-id="${escapeHtml(item.id)}">
+                                <td>${escapeHtml(item.code)}</td>
+                                <td>${escapeHtml(item.symbol)}</td>
+                                <td>${escapeHtml(item.rate)}</td>
+                                <td>${escapeHtml(item.updated_date)}</td>
                                 <td class="text-end">
                                     <span class="dropdown" style="position: unset;">
                                         <button ${editable} class="btn dropdown-toggle align-text-top" data-bs-boundary="viewport" data-bs-toggle="dropdown" aria-expanded="false">Actions</button>

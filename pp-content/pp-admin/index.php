@@ -952,6 +952,15 @@
             });
         }
 
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
         function load_content(page, url, nav_id, fromPopState = false) {
             const cleanPath = getAdminPath(url);
             const queryParams = getQueryParams(url);

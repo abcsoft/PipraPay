@@ -1,3 +1,5 @@
 pp-config.php
 .tempmediaStorage/
 *.log
+backups/
+pp-media/storage/

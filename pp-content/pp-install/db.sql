@@ -454,6 +454,7 @@ CREATE TABLE `pp_transaction` (
   `local_currency` text NULL,
   `sender` varchar(50) NOT NULL DEFAULT '--',
   `trx_id` varchar(70) NOT NULL DEFAULT '--',
+  `trx_id_unique` varchar(70) GENERATED ALWAYS AS (CASE WHEN TRIM(`trx_id`) = '' OR TRIM(`trx_id`) = '--' THEN NULL ELSE TRIM(`trx_id`) END) STORED,
   `trx_slip` text NULL,
   `gateway_id` varchar(50) NOT NULL DEFAULT '--',
   `sender_key` varchar(50) NOT NULL DEFAULT '--',
@@ -681,6 +682,8 @@ ALTER TABLE `pp_sms_data`
 --
 ALTER TABLE `pp_transaction`
   ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_transaction_ref` (`ref`),
+  ADD UNIQUE KEY `uniq_gateway_trx_id` (`gateway_id`, `trx_id_unique`),
   ADD KEY `brand_id` (`brand_id`,`ref`,`trx_id`),
   ADD KEY `payment_method_id` (`gateway_id`,`sender_key`),
   ADD KEY `gateway_slug` (`sender_key`),

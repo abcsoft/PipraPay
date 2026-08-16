@@ -185,7 +185,8 @@
                     if (class_exists($className)) {
                         $options = [];
 
-                        $response_addonOptionLoader = json_decode(getData($db_prefix.'addon_parameter',' WHERE addon_id = "'.$row['addon_id'].'"'),true);
+                        $params_addon = [':addon_id' => $row['addon_id']];
+                        $response_addonOptionLoader = json_decode(getData($db_prefix.'addon_parameter','WHERE addon_id = :addon_id', '* FROM', $params_addon),true);
                         foreach ($response_addonOptionLoader['response'] as $rowOption) {
                             $value = $rowOption['value'];
                             if (in_array($value[0] ?? '', ['[','{'])) {
@@ -319,7 +320,7 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             $global_user_login = false;
                         }
                     }else{
-                        $global_user_login = true;
+                        $global_user_login = false;
                     }
                 }else{
                     $global_user_login = false;
@@ -376,7 +377,7 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                 $global_user_2fa = false;
                             }
                         }else{
-                            $global_user_2fa = true;
+                            $global_user_2fa = false;
                         }
                     }else{
                         $global_user_2fa = false;
@@ -423,8 +424,28 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                 $pp_app_id = escape_string($_POST['pp-app-id'] ?? '');
                 $pp_app_timestamp = escape_string($_POST['pp-app-timestamp'] ?? '');
 
+                $secretKey = $pp_token_secret ?? $pp_app_secret ?? $token_secret ?? (defined('PP_TOKEN_SECRET') ? PP_TOKEN_SECRET : (defined('PP_APP_SECRET') ? PP_APP_SECRET : null));
+
+                if (empty($secretKey) || !is_string($secretKey) || trim($secretKey) === '') {
+                    echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => 'Invalid request token' , 'csrf_token' => $new_csrf_token]);
+                    exit;
+                }
+
+                if ($pp_app_timestamp === '' || !is_numeric($pp_app_timestamp)) {
+                    echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => 'Invalid request token' , 'csrf_token' => $new_csrf_token]);
+                    exit;
+                }
+
+                $timestamp = intval($pp_app_timestamp);
+                $currentTime = time();
+
+                if (abs($currentTime - $timestamp) > 300) {
+                    echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => 'Invalid request token' , 'csrf_token' => $new_csrf_token]);
+                    exit;
+                }
+
                 $data = $pp_app_id . '|' . $pp_app_timestamp;
-                $expectedSignature = hash_hmac('sha256', $data, '698b7520-c604-8323-a04d-dc519bb3e1d3');
+                $expectedSignature = hash_hmac('sha256', $data, $secretKey);
 
                 if (!hash_equals($expectedSignature, $pp_app_token)) {
                     echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => 'Invalid request token' , 'csrf_token' => $new_csrf_token]);
@@ -527,6 +548,12 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         }else{
                             if (password_verify($password, $response['response'][0]['temp_password'])) {
                                 if ($response['response'][0]['status'] == "active") {
+                                    $columns = ['password', 'temp_password', 'updated_date'];
+                                    $values = [$response['response'][0]['temp_password'], '--', getCurrentDatetime('Y-m-d H:i:s')];
+                                    $condition = "id = :cond_id";
+                                    $conditionParams = [':cond_id' => $response['response'][0]['id']];
+                                    updateData($db_prefix.'admin', $columns, $values, $condition, $conditionParams);
+
                                     $cookie = bin2hex(random_bytes(16)); 
                                     $userInfo = getUserDeviceInfo();
 
@@ -603,7 +630,7 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             $check = $ga->verifyCode($response['response'][0]['2fa_secret'], $code_one.$code_two.$code_three.$code_four.$code_five.$code_six, 2);
 
                             if ($check) {
-                                logoutCookie();
+                                setsCookie('pp_2fa', '', -1);
 
                                 setsCookie('pp_brand', $global_response_brand['response'][0]['brand_id']);
                                 setsCookie('pp_admin', $global_cookie_response['response'][0]['cookie']);
@@ -831,49 +858,47 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
             if($action == "activities-list"){
                 if($global_user_login == true){
-                    $search_input = escape_string($_POST['search_input'] ?? '');
-                    $show_limit = escape_string($_POST['show_limit'] ?? 5);
+                    $search_input = trim($_POST['search_input'] ?? '');
+                    $show_limit_raw = $_POST['show_limit'] ?? 5;
 
                     /* Filters */
-                    $filter_status = escape_string($_POST['filter_status'] ?? '');
-                    $filter_start  = escape_string($_POST['filter_start'] ?? '');
-                    $filter_end    = escape_string($_POST['filter_end'] ?? '');
+                    $filter_status = trim($_POST['filter_status'] ?? '');
+                    $filter_start  = trim($_POST['filter_start'] ?? '');
+                    $filter_end    = trim($_POST['filter_end'] ?? '');
 
-                    $where = [];
+                    $where = ['a_id = :a_id'];
+                    $params = [':a_id' => $global_user_response['response'][0]['a_id']];
 
                     if ($filter_start !== '') {
-                        $where[] = "created_date >= '{$filter_start} 00:00:00'";
+                        $where[] = 'created_date >= :filter_start';
+                        $params[':filter_start'] = "{$filter_start} 00:00:00";
                     }
 
                     if ($filter_end !== '') {
-                        $where[] = "created_date <= '{$filter_end} 23:59:59'";
+                        $where[] = 'created_date <= :filter_end';
+                        $params[':filter_end'] = "{$filter_end} 23:59:59";
                     }
 
                     if ($filter_status !== '') {
-                        $where[] = "status = '{$filter_status}'";
+                        $where[] = 'status = :filter_status';
+                        $params[':filter_status'] = $filter_status;
                     }
 
-                    $where_sql = $where ? implode(' AND ', $where) . ' AND ' : '';
+                    if ($search_input !== '') {
+                        $where[] = '(browser LIKE :search OR device LIKE :search OR ip LIKE :search)';
+                        $params[':search'] = '%' . $search_input . '%';
+                    }
+
+                    $where_sql = 'WHERE ' . implode(' AND ', $where);
                     /* Filters */
 
                     $page = max(1, intval($_POST['page'] ?? 1));
-                    $show_limit = ($_POST['show_limit'] == '') ? 999999 : intval($_POST['show_limit']);
-                    $offset = ($page - 1) * $show_limit;
+                    $show_limit = ($show_limit_raw === '' || $show_limit_raw === 'all') ? 999999 : max(1, min(1000, intval($show_limit_raw)));
+                    $offset = max(0, ($page - 1) * $show_limit);
 
-                    $sql_query = '';
+                    $sql_limit = ($show_limit_raw === 'all') ? '' : " LIMIT " . intval($offset) . ", " . intval($show_limit);
 
-                    if ($search_input !== '') {
-                        $sql_query .= " AND ( browser LIKE '%$search_input%' OR device LIKE '%$search_input%' OR ip LIKE '%$search_input%')";
-                    }
-
-                    $sql_limit = '';
-                    if($show_limit == 'all'){
-
-                    }else{
-                       $sql_limit = " LIMIT $offset, $show_limit";
-                    }
-
-                    $response_result = json_decode(getData($db_prefix.'browser_log','WHERE '.$where_sql.' a_id = "'.$global_user_response['response'][0]['a_id'].'" '.$sql_query.' ORDER BY 1 DESC '.$sql_limit),true);
+                    $response_result = json_decode(getData($db_prefix.'browser_log', $where_sql . ' ORDER BY 1 DESC ' . $sql_limit, '* FROM', $params), true);
                     if($response_result['status'] == true){
                         $response = [];
 
@@ -895,10 +920,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             ];
                         }
 
-                        $count_data = json_decode(getData($db_prefix.'browser_log','WHERE '.$where_sql.' a_id = "'.$global_user_response['response'][0]['a_id'].'" '.$sql_query),true);
+                        $count_data = json_decode(getData($db_prefix.'browser_log', $where_sql, '* FROM', $params), true);
 
                         $total_records = count($count_data['response'] ?? []);
-                        $total_pages = ceil($total_records / $show_limit);
+                        $total_pages = ($show_limit > 0) ? (int)ceil($total_records / $show_limit) : 1;
 
                         $pagination = '<ul class="pagination m-0 ms-auto">';
 
@@ -951,49 +976,47 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $search_input = escape_string($_POST['search_input'] ?? '');
-                    $show_limit = escape_string($_POST['show_limit'] ?? 5);
+                    $search_input = trim($_POST['search_input'] ?? '');
+                    $show_limit_raw = $_POST['show_limit'] ?? 5;
 
                     /* Filters */
-                    $filter_status = escape_string($_POST['filter_status'] ?? '');
-                    $filter_start  = escape_string($_POST['filter_start'] ?? '');
-                    $filter_end    = escape_string($_POST['filter_end'] ?? '');
+                    $filter_status = trim($_POST['filter_status'] ?? '');
+                    $filter_start  = trim($_POST['filter_start'] ?? '');
+                    $filter_end    = trim($_POST['filter_end'] ?? '');
 
                     $where = [];
+                    $params = [':role' => 'staff', ':current_aid' => $global_user_response['response'][0]['a_id']];
 
                     if ($filter_start !== '') {
-                        $where[] = "created_date >= '{$filter_start} 00:00:00'";
+                        $where[] = "created_date >= :filter_start";
+                        $params[':filter_start'] = "{$filter_start} 00:00:00";
                     }
 
                     if ($filter_end !== '') {
-                        $where[] = "created_date <= '{$filter_end} 23:59:59'";
+                        $where[] = "created_date <= :filter_end";
+                        $params[':filter_end'] = "{$filter_end} 23:59:59";
                     }
 
                     if ($filter_status !== '') {
-                        $where[] = "status = '{$filter_status}'";
+                        $where[] = "status = :filter_status";
+                        $params[':filter_status'] = $filter_status;
                     }
-
-                    $where_sql = $where ? implode(' AND ', $where) . ' AND ' : '';
-                    /* Filters */
-
-                    $page = max(1, intval($_POST['page'] ?? 1));
-                    $show_limit = ($_POST['show_limit'] == '') ? 999999 : intval($_POST['show_limit']);
-                    $offset = ($page - 1) * $show_limit;
-
-                    $sql_query = '';
 
                     if ($search_input !== '') {
-                        $sql_query .= " AND ( full_name LIKE '%$search_input%' OR email LIKE '%$search_input%' OR username LIKE '%$search_input%')";
+                        $where[] = "(full_name LIKE :search OR email LIKE :search OR username LIKE :search)";
+                        $params[':search'] = '%' . $search_input . '%';
                     }
 
-                    $sql_limit = '';
-                    if($show_limit == 'all'){
+                    $where[] = "role = :role AND a_id NOT IN (:current_aid)";
+                    $where_sql = 'WHERE ' . implode(' AND ', $where);
 
-                    }else{
-                       $sql_limit = " LIMIT $offset, $show_limit";
-                    }
+                    $page = max(1, intval($_POST['page'] ?? 1));
+                    $show_limit = ($show_limit_raw === '' || $show_limit_raw === 'all') ? 999999 : max(1, min(1000, intval($show_limit_raw)));
+                    $offset = max(0, ($page - 1) * $show_limit);
 
-                    $response_result = json_decode(getData($db_prefix.'admin','WHERE '.$where_sql.'  role = "staff" AND a_id NOT IN ("'.$global_user_response['response'][0]['a_id'].'") '.$sql_query.' ORDER BY 1 DESC '.$sql_limit),true);
+                    $sql_limit = ($show_limit_raw === 'all') ? '' : " LIMIT " . intval($offset) . ", " . intval($show_limit);
+
+                    $response_result = json_decode(getData($db_prefix.'admin', $where_sql . ' ORDER BY 1 DESC ' . $sql_limit, '* FROM', $params), true);
                     if($response_result['status'] == true){
                         $response = [];
 
@@ -1010,10 +1033,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             ];
                         }
 
-                        $count_data = json_decode(getData($db_prefix.'admin','WHERE '.$where_sql.' role="staff" AND a_id NOT IN ("'.$global_user_response['response'][0]['a_id'].'") '.$sql_query),true);
+                        $count_data = json_decode(getData($db_prefix.'admin', $where_sql, '* FROM', $params), true);
 
                         $total_records = count($count_data['response'] ?? []);
-                        $total_pages = ceil($total_records / $show_limit);
+                        $total_pages = ($show_limit > 0) ? (int)ceil($total_records / $show_limit) : 1;
 
                         $pagination = '<ul class="pagination m-0 ms-auto">';
 
@@ -1075,7 +1098,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         foreach ($selected_ids as $id) {
                             $itemID = escape_string($id);
 
-                            $response_staff = json_decode(getData($db_prefix.'admin','WHERE role = "staff" AND a_id = "'.$itemID.'" '),true);
+                            $params_staff = [':role' => 'staff', ':a_id' => $itemID];
+                            $response_staff = json_decode(getData($db_prefix.'admin','WHERE role = :role AND a_id = :a_id', '* FROM', $params_staff),true);
                             if($response_staff['status'] == true){
                                 if($itemID == $global_user_response['response'][0]['a_id']){
 
@@ -1083,17 +1107,12 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                     if($actionID == "deleted"){
                                         if (hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'staff', 'delete', $global_user_response['response'][0]['role'])) {
                         
-                                            $condition = "a_id = '".$response_staff['response'][0]['a_id']."'"; 
+                                            $condition = 'a_id = :cond_aid';
+                                            $conditionParams = [':cond_aid' => $response_staff['response'][0]['a_id']];
                                             
-                                            deleteData($db_prefix.'permission', $condition);
-
-                                            $condition = "a_id = '".$response_staff['response'][0]['a_id']."'"; 
-                                            
-                                            deleteData($db_prefix.'browser_log', $condition);
-
-                                            $condition = "a_id = '".$response_staff['response'][0]['a_id']."'"; 
-                                            
-                                            deleteData($db_prefix.'admin', $condition);
+                                            deleteData($db_prefix.'permission', $condition, $conditionParams);
+                                            deleteData($db_prefix.'browser_log', $condition, $conditionParams);
+                                            deleteData($db_prefix.'admin', $condition, $conditionParams);
 
                                         }
                                     }
@@ -1103,9 +1122,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                                 
                                             $columns = ['status', 'updated_date'];
                                             $values = ['active', getCurrentDatetime('Y-m-d H:i:s')];
-                                            $condition = "a_id = '".$itemID."'"; 
+                                            $condition = 'a_id = :cond_aid';
+                                            $conditionParams = [':cond_aid' => $itemID];
                                             
-                                            updateData($db_prefix.'admin', $columns, $values, $condition);
+                                            updateData($db_prefix.'admin', $columns, $values, $condition, $conditionParams);
 
                                         }
                                     }
@@ -1115,9 +1135,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                                 
                                             $columns = ['status', 'updated_date'];
                                             $values = ['suspend', getCurrentDatetime('Y-m-d H:i:s')];
-                                            $condition = "a_id = '".$itemID."'"; 
+                                            $condition = 'a_id = :cond_aid';
+                                            $conditionParams = [':cond_aid' => $itemID];
                                             
-                                            updateData($db_prefix.'admin', $columns, $values, $condition);
+                                            updateData($db_prefix.'admin', $columns, $values, $condition, $conditionParams);
 
                                         }
                                     }
@@ -1148,22 +1169,26 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_staff = json_decode(getData($db_prefix.'admin','WHERE role = "staff" AND a_id = "'.$ItemID.'" '),true);
+                    $params_staff = [':role' => 'staff', ':a_id' => $ItemID];
+                    $response_staff = json_decode(getData($db_prefix.'admin','WHERE role = :role AND a_id = :a_id', '* FROM', $params_staff),true);
                     if($response_staff['status'] == true){
                         if($ItemID == $global_user_response['response'][0]['a_id']){
                             echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => 'You cannot delete your own account.' , 'csrf_token' => $new_csrf_token]);
                         }else{
-                            $condition = "a_id = '".$response_staff['response'][0]['a_id']."'"; 
+                            $condition = "a_id = :a_id"; 
+                            $conditionParams = [':a_id' => $response_staff['response'][0]['a_id']];
                             
-                            deleteData($db_prefix.'permission', $condition);
+                            deleteData($db_prefix.'permission', $condition, $conditionParams);
 
-                            $condition = "a_id = '".$response_staff['response'][0]['a_id']."'"; 
+                            $condition = "a_id = :a_id"; 
+                            $conditionParams = [':a_id' => $response_staff['response'][0]['a_id']];
                             
-                            deleteData($db_prefix.'browser_log', $condition);
+                            deleteData($db_prefix.'browser_log', $condition, $conditionParams);
 
-                            $condition = "id = '".$response_staff['response'][0]['id']."'"; 
+                            $condition = "id = :id"; 
+                            $conditionParams = [':id' => $response_staff['response'][0]['id']];
                             
-                            deleteData($db_prefix.'admin', $condition);
+                            deleteData($db_prefix.'admin', $condition, $conditionParams);
 
                             echo json_encode(['status' => 'true', 'title' => 'Staff Deleted', 'message' => 'The staff member have been deleted successfully.', 'csrf_token' => $new_csrf_token]);
                         }
@@ -1210,13 +1235,15 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                 exit();
                             }
 
-                            $response = json_decode(getData($db_prefix.'admin','WHERE username = "'.$username.'"'),true);
+                            $params_u = [':username' => $username];
+                            $response = json_decode(getData($db_prefix.'admin','WHERE username = :username', '* FROM', $params_u),true);
                             if($response['status'] == true){
                                 echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Username already exits.', 'csrf_token' => $new_csrf_token]);
                                 exit();
                             }
 
-                            $response = json_decode(getData($db_prefix.'admin','WHERE email = "'.$email_address.'"'),true);
+                            $params_e = [':email' => $email_address];
+                            $response = json_decode(getData($db_prefix.'admin','WHERE email = :email', '* FROM', $params_e),true);
                             if($response['status'] == true){
                                 echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Email Address already exits.', 'csrf_token' => $new_csrf_token]);
                                 exit();
@@ -1259,7 +1286,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             foreach ($brands as $brand_id) {
                                 $brand_id = escape_string($brand_id);
 
-                                $response = json_decode(getData($db_prefix.'brands','WHERE brand_id = "'.$brand_id.'"'),true);
+                                $params_b = [':brand_id' => $brand_id];
+                                $response = json_decode(getData($db_prefix.'brands','WHERE brand_id = :brand_id', '* FROM', $params_b),true);
                                 if($response['status'] == true){
 
                                     $columns = ['brand_id', 'a_id', 'permission', 'created_date', 'updated_date'];
@@ -1297,7 +1325,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     $password = escape_string($_POST['password'] ?? '');
                     $itemID = escape_string($_POST['itemID'] ?? '');
 
-                    $response_staff = json_decode(getData($db_prefix.'admin','WHERE role = "staff" AND a_id = "'.$itemID.'"'),true);
+                    $params_st = [':role' => 'staff', ':a_id' => $itemID];
+                    $response_staff = json_decode(getData($db_prefix.'admin','WHERE role = :role AND a_id = :a_id', '* FROM', $params_st),true);
                     if($response_staff['status'] == true){
                         if($global_user_response['response'][0]['a_id'] == $itemID){
                             echo json_encode(['status' => "false", 'title' => 'Edit Staff Failed', 'message' => 'You are not allowed to edit your own staff information.', 'csrf_token' => $new_csrf_token]);
@@ -1313,7 +1342,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                 }
 
                                 if($username !== $response_staff['response'][0]['username']){
-                                    $response = json_decode(getData($db_prefix.'admin','WHERE username = "'.$username.'"'),true);
+                                    $params_u = [':username' => $username];
+                            $response = json_decode(getData($db_prefix.'admin','WHERE username = :username', '* FROM', $params_u),true);
                                     if($response['status'] == true){
                                         echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Username already exits.', 'csrf_token' => $new_csrf_token]);
                                         exit();
@@ -1321,7 +1351,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                 }
 
                                 if($email_address !== $response_staff['response'][0]['email']){
-                                    $response = json_decode(getData($db_prefix.'admin','WHERE email = "'.$email_address.'"'),true);
+                                    $params_e = [':email' => $email_address];
+                            $response = json_decode(getData($db_prefix.'admin','WHERE email = :email', '* FROM', $params_e),true);
                                     if($response['status'] == true){
                                         echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Email Address already exits.', 'csrf_token' => $new_csrf_token]);
                                         exit();
@@ -1366,43 +1397,43 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $show_limit = escape_string($_POST['show_limit'] ?? 5);
-                    $a_id = escape_string($_POST['a_id'] ?? '');
+                    $show_limit_raw = $_POST['show_limit'] ?? 5;
+                    $a_id = trim($_POST['a_id'] ?? '');
 
                     /* Filters */
-                    $filter_status = escape_string($_POST['filter_status'] ?? '');
-                    $filter_start  = escape_string($_POST['filter_start'] ?? '');
-                    $filter_end    = escape_string($_POST['filter_end'] ?? '');
+                    $filter_status = trim($_POST['filter_status'] ?? '');
+                    $filter_start  = trim($_POST['filter_start'] ?? '');
+                    $filter_end    = trim($_POST['filter_end'] ?? '');
 
                     $where = [];
+                    $params_perm = [];
 
                     if ($filter_start !== '') {
-                        $where[] = "created_date >= '{$filter_start} 00:00:00'";
+                        $where[] = "created_date >= :filter_start";
+                        $params_perm[':filter_start'] = "{$filter_start} 00:00:00";
                     }
 
                     if ($filter_end !== '') {
-                        $where[] = "created_date <= '{$filter_end} 23:59:59'";
+                        $where[] = "created_date <= :filter_end";
+                        $params_perm[':filter_end'] = "{$filter_end} 23:59:59";
                     }
 
                     if ($filter_status !== '') {
-                        $where[] = "status = '{$filter_status}'";
+                        $where[] = "status = :filter_status";
+                        $params_perm[':filter_status'] = $filter_status;
                     }
 
                     $where_sql = $where ? implode(' AND ', $where) . ' AND ' : '';
                     /* Filters */
 
                     $page = max(1, intval($_POST['page'] ?? 1));
-                    $show_limit = ($_POST['show_limit'] == '') ? 999999 : intval($_POST['show_limit']);
-                    $offset = ($page - 1) * $show_limit;
+                    $show_limit = ($show_limit_raw === '' || $show_limit_raw === 'all') ? 999999 : max(1, min(1000, intval($show_limit_raw)));
+                    $offset = max(0, ($page - 1) * $show_limit);
 
-                    $sql_limit = '';
-                    if($show_limit == 'all'){
+                    $sql_limit = ($show_limit_raw === 'all') ? '' : " LIMIT " . intval($offset) . ", " . intval($show_limit);
 
-                    }else{
-                       $sql_limit = " LIMIT $offset, $show_limit";
-                    }
-
-                    $response_staff = json_decode(getData($db_prefix.'admin','WHERE a_id = "'.$a_id.'" AND id NOT IN ("'.$global_user_response['response'][0]['id'].'") AND role = "staff"'),true);
+                    $params_st = [':a_id' => $a_id, ':current_id' => $global_user_response['response'][0]['id'], ':role' => 'staff'];
+                    $response_staff = json_decode(getData($db_prefix.'admin','WHERE a_id = :a_id AND id NOT IN (:current_id) AND role = :role', '* FROM', $params_st),true);
                     if($response_staff['status'] == true){
                         if($global_user_response['response'][0]['a_id'] == $a_id){
                             echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => "You can't edit your info" , 'csrf_token' => $new_csrf_token]);
@@ -1413,12 +1444,14 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $response_result = json_decode(getData($db_prefix.'permission','WHERE '.$where_sql.' a_id = "'.$response_staff['response'][0]['a_id'].'" ORDER BY 1 DESC '.$sql_limit),true);
+                    $params_perm[':a_id'] = $response_staff['response'][0]['a_id'];
+                    $response_result = json_decode(getData($db_prefix.'permission','WHERE ' . ($where_sql ? $where_sql : '') . 'a_id = :a_id ORDER BY 1 DESC ' . $sql_limit, '* FROM', $params_perm),true);
                     if($response_result['status'] == true){
                         $response = [];
 
                         foreach($response_result['response'] as $row){
-                            $response_brand = json_decode(getData($db_prefix.'brands','WHERE brand_id = "'.$row['brand_id'].'"'),true);
+                            $params_br = [':brand_id' => $row['brand_id']];
+                            $response_brand = json_decode(getData($db_prefix.'brands','WHERE brand_id = :brand_id', '* FROM', $params_br),true);
                             if($response_brand['status'] == true){
                                 $response[] = [
                                     "id"   => $row['id'],
@@ -1431,10 +1464,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             }
                         }
 
-                        $count_data = json_decode(getData($db_prefix.'permission','WHERE a_id = "'.$response_staff['response'][0]['a_id'].'"'),true);
+                        $count_data = json_decode(getData($db_prefix.'permission','WHERE ' . ($where_sql ? $where_sql : '') . 'a_id = :a_id', '* FROM', $params_perm),true);
 
                         $total_records = count($count_data['response'] ?? []);
-                        $total_pages = ceil($total_records / $show_limit);
+                        $total_pages = ($show_limit > 0) ? (int)ceil($total_records / $show_limit) : 1;
 
                         $pagination = '<ul class="pagination m-0 ms-auto">';
 
@@ -1495,12 +1528,14 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         foreach ($selected_ids as $id) {
                             $itemID = escape_string($id);
 
-                            $response_brand = json_decode(getData($db_prefix.'permission','WHERE id = "'.$itemID.'"'),true);
+                            $params_p = [':id' => $itemID];
+                            $response_brand = json_decode(getData($db_prefix.'permission','WHERE id = :id', '* FROM', $params_p),true);
                             if($response_brand['status'] == true){
                                 if($response_brand['response'][0]['a_id'] == $global_user_response['response'][0]['a_id']){
 
                                 }else{
-                                    $response_admin = json_decode(getData($db_prefix.'admin','WHERE role = "admin" AND a_id = "'.$response_brand['response'][0]['a_id'].'" '),true);
+                                    $params_adm = [':role' => 'admin', ':a_id' => $response_brand['response'][0]['a_id']];
+                                    $response_admin = json_decode(getData($db_prefix.'admin','WHERE role = :role AND a_id = :a_id', '* FROM', $params_adm),true);
                                     if($response_admin['status'] == true){
 
                                     }else{
@@ -1559,9 +1594,11 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_permision = json_decode(getData($db_prefix.'permission','WHERE id = "'.$ItemID.'"'),true);
+                    $params_perm = [':id' => $ItemID];
+                    $response_permision = json_decode(getData($db_prefix.'permission','WHERE id = :id', '* FROM', $params_perm),true);
                     if($response_permision['status'] == true){
-                        $response_staff = json_decode(getData($db_prefix.'admin','WHERE role = "staff" AND a_id = "'.$response_permision['response'][0]['a_id'].'" '),true);
+                        $params_st = [':role' => 'staff', ':a_id' => $response_permision['response'][0]['a_id']];
+                        $response_staff = json_decode(getData($db_prefix.'admin','WHERE role = :role AND a_id = :a_id', '* FROM', $params_st),true);
                         if($response_staff['status'] == true){
                             if($response_staff['response'][0]['id'] == $global_user_response['response'][0]['id']){
                                 echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => 'You cannot delete your own permission.' , 'csrf_token' => $new_csrf_token]);
@@ -1610,7 +1647,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $response_staff = json_decode(getData($db_prefix.'admin','WHERE role = "staff" AND a_id = "'.$staffID.'"'),true);
+                    $params_st = [':role' => 'staff', ':a_id' => $staffID];
+                    $response_staff = json_decode(getData($db_prefix.'admin','WHERE role = :role AND a_id = :a_id', '* FROM', $params_st),true);
                     if($response_staff['status'] == true){
                         if($global_user_response['response'][0]['a_id'] == $staffID){
                             echo json_encode(['status' => "false", 'title' => 'Edit Staff Failed', 'message' => 'You are not allowed to edit your own permissions.', 'csrf_token' => $new_csrf_token]);
@@ -1618,10 +1656,12 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         }
 
                         foreach ($brands as $brandid) {
-                            $response_brand = json_decode(getData($db_prefix . 'brands', ' WHERE brand_id = "'.$brandid.'"'), true);
+                            $params_br = [':brand_id' => $brandid];
+                            $response_brand = json_decode(getData($db_prefix . 'brands', 'WHERE brand_id = :brand_id', '* FROM', $params_br), true);
                             if ($response_brand['status'] == true) {
                                 foreach ($response_brand['response'] as $row) {
-                                    $response_permission = json_decode(getData($db_prefix . 'permission', ' WHERE a_id = "'.$response_staff['response'][0]['a_id'].'" AND brand_id = "'.$row['brand_id'].'"'), true);
+                                    $params_p = [':a_id' => $response_staff['response'][0]['a_id'], ':brand_id' => $row['brand_id']];
+                                    $response_permission = json_decode(getData($db_prefix . 'permission', 'WHERE a_id = :a_id AND brand_id = :brand_id', '* FROM', $params_p), true);
                                     
                                     if($response_permission['status'] == true){
 
@@ -1684,9 +1724,11 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $permission_json = json_encode($newPermissions);
 
-                    $response = json_decode(getData($db_prefix.'permission','WHERE id = "'.$permission_id.'"'),true);
+                    $params_p = [':id' => $permission_id];
+                        $response = json_decode(getData($db_prefix.'permission','WHERE id = :id', '* FROM', $params_p),true);
                     if($response['status'] == true){
-                        $response_staff = json_decode(getData($db_prefix.'admin','WHERE role = "staff" AND a_id = "'.$response['response'][0]['a_id'].'"'),true);
+                        $params_st = [':role' => 'staff', ':a_id' => $response['response'][0]['a_id']];
+                        $response_staff = json_decode(getData($db_prefix.'admin','WHERE role = :role AND a_id = :a_id', '* FROM', $params_st),true);
                         if($response_staff['status'] == true){
                             if($global_user_response['response'][0]['a_id'] == $response['response'][0]['a_id']){
                                 echo json_encode(['status' => "false", 'title' => 'Edit Staff Failed', 'message' => 'You are not allowed to edit your own permissions.', 'csrf_token' => $new_csrf_token]);
@@ -1729,7 +1771,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     if($brand_name == ""){
                         echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Please fill in all required fields before proceeding.', 'csrf_token' => $new_csrf_token]);
                     }else{
-                        $response = json_decode(getData($db_prefix.'brands','WHERE identify_name = "'.$brand_name.'"'),true);
+                        $params_b = [':name' => $brand_name];
+                        $response = json_decode(getData($db_prefix.'brands','WHERE identify_name = :name', '* FROM', $params_b),true);
                         if($response['status'] == false){
                             $brand_id = generateItemID();
 
@@ -1777,44 +1820,41 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $search_input = escape_string($_POST['search_input'] ?? '');
-                    $show_limit = escape_string($_POST['show_limit'] ?? 5);
+                    $search_input = trim($_POST['search_input'] ?? '');
+                    $show_limit_raw = $_POST['show_limit'] ?? 5;
 
                     /* Filters */
-                    $filter_start  = escape_string($_POST['filter_start'] ?? '');
-                    $filter_end    = escape_string($_POST['filter_end'] ?? '');
+                    $filter_start  = trim($_POST['filter_start'] ?? '');
+                    $filter_end    = trim($_POST['filter_end'] ?? '');
 
-                    $where = [];
+                    $where = ['identify_name NOT IN (:empty)'];
+                    $params_b = [':empty' => ''];
 
                     if ($filter_start !== '') {
-                        $where[] = "created_date >= '{$filter_start} 00:00:00'";
+                        $where[] = "created_date >= :filter_start";
+                        $params_b[':filter_start'] = "{$filter_start} 00:00:00";
                     }
 
                     if ($filter_end !== '') {
-                        $where[] = "created_date <= '{$filter_end} 23:59:59'";
+                        $where[] = "created_date <= :filter_end";
+                        $params_b[':filter_end'] = "{$filter_end} 23:59:59";
                     }
 
-                    $where_sql = $where ? implode(' AND ', $where) . ' AND ' : '';
+                    if ($search_input !== '') {
+                        $where[] = "(identify_name LIKE :search OR name LIKE :search)";
+                        $params_b[':search'] = '%' . $search_input . '%';
+                    }
+
+                    $where_sql = 'WHERE ' . implode(' AND ', $where);
                     /* Filters */
 
                     $page = max(1, intval($_POST['page'] ?? 1));
-                    $show_limit = ($_POST['show_limit'] == '') ? 999999 : intval($_POST['show_limit']);
-                    $offset = ($page - 1) * $show_limit;
+                    $show_limit = ($show_limit_raw === '' || $show_limit_raw === 'all') ? 999999 : max(1, min(1000, intval($show_limit_raw)));
+                    $offset = max(0, ($page - 1) * $show_limit);
 
-                    $sql_query = '';
+                    $sql_limit = ($show_limit_raw === 'all') ? '' : " LIMIT " . intval($offset) . ", " . intval($show_limit);
 
-                    if ($search_input !== '') {
-                        $sql_query .= " AND ( identify_name LIKE '%$search_input%' OR name LIKE '%$search_input%' )";
-                    }
-
-                    $sql_limit = '';
-                    if($show_limit == 'all'){
-
-                    }else{
-                       $sql_limit = " LIMIT $offset, $show_limit";
-                    }
-
-                    $response_result = json_decode(getData($db_prefix.'brands',' WHERE '.$where_sql.' identify_name NOT IN ("") '.$sql_query.' ORDER BY 1 DESC '.$sql_limit),true);
+                    $response_result = json_decode(getData($db_prefix.'brands', $where_sql . ' ORDER BY 1 DESC ' . $sql_limit, '* FROM', $params_b), true);
                     if($response_result['status'] == true){
                         $response = [];
 
@@ -1835,10 +1875,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             ];
                         }
 
-                        $count_data = json_decode(getData($db_prefix.'brands','  '.$sql_query),true);
+                        $count_data = json_decode(getData($db_prefix.'brands', $where_sql, '* FROM', $params_b), true);
 
                         $total_records = count($count_data['response'] ?? []);
-                        $total_pages = ceil($total_records / $show_limit);
+                        $total_pages = ($show_limit > 0) ? (int)ceil($total_records / $show_limit) : 1;
 
                         $pagination = '<ul class="pagination m-0 ms-auto">';
 
@@ -1899,7 +1939,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         foreach ($selected_ids as $id) {
                             $itemID = escape_string($id);
 
-                            $response_brand = json_decode(getData($db_prefix.'brands','WHERE brand_id = "'.$itemID.'"'),true);
+                            $params_b = [':brand_id' => $itemID];
+                    $response_brand = json_decode(getData($db_prefix.'brands','WHERE brand_id = :brand_id', '* FROM', $params_b),true);
                             if($response_brand['status'] == true){
                                 if($actionID == "deleted"){
                                     if($response_brand['response'][0]['id'] == 1 || $response_brand['response'][0]['brand_id'] == $global_response_brand['response'][0]['brand_id']){
@@ -1907,69 +1948,58 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                     }else{
                                         if (hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'brands', 'delete', $global_user_response['response'][0]['role'])) {
                                         
-                                            $condition = "brand_id = '".$itemID."'"; 
-                                            
-                                            deleteData($db_prefix.'brands', $condition);
+                                            $bId = $response_brand['response'][0]['brand_id'];
+                                            $bCondParams = [':brand_id' => $bId];
 
+                                            $condition = "brand_id = :brand_id"; 
+                                            deleteData($db_prefix.'brands', $condition, $bCondParams);
 
-                                            $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                            
-                                            deleteData($db_prefix.'api', $condition);
+                                            $condition = "brand_id = :brand_id"; 
+                                            deleteData($db_prefix.'api', $condition, $bCondParams);
 
-                                            $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                            
-                                            deleteData($db_prefix.'currency', $condition);
+                                            $condition = "brand_id = :brand_id"; 
+                                            deleteData($db_prefix.'currency', $condition, $bCondParams);
 
-                                            $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                            
-                                            deleteData($db_prefix.'customer', $condition);
+                                            $condition = "brand_id = :brand_id"; 
+                                            deleteData($db_prefix.'customer', $condition, $bCondParams);
 
-                                            $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                            
-                                            deleteData($db_prefix.'env', $condition);
+                                            $condition = "brand_id = :brand_id"; 
+                                            deleteData($db_prefix.'env', $condition, $bCondParams);
 
-                                            $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                            
-                                            deleteData($db_prefix.'faq', $condition);
+                                            $condition = "brand_id = :brand_id"; 
+                                            deleteData($db_prefix.'faq', $condition, $bCondParams);
 
-                                            $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                            
-                                            deleteData($db_prefix.'gateways', $condition);
+                                            $condition = "brand_id = :brand_id"; 
+                                            deleteData($db_prefix.'gateways', $condition, $bCondParams);
 
-                                            $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                            
-                                            deleteData($db_prefix.'gateways_parameter', $condition);
+                                            $condition = "brand_id = :brand_id"; 
+                                            deleteData($db_prefix.'gateways_parameter', $condition, $bCondParams);
 
-                                            $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                            
-                                            deleteData($db_prefix.'invoice', $condition);
+                                            $condition = "brand_id = :brand_id"; 
+                                            deleteData($db_prefix.'invoice', $condition, $bCondParams);
 
-                                            $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                            
-                                            deleteData($db_prefix.'invoice_items', $condition);
+                                            $condition = "brand_id = :brand_id"; 
+                                            deleteData($db_prefix.'invoice_items', $condition, $bCondParams);
 
-                                            $response_payment_link_filed = json_decode(getData($db_prefix.'payment_link','WHERE brand_id = "'.$response_brand['response'][0]['brand_id'].'"'),true);
+                                            $params_pl = [':brand_id' => $bId];
+                                            $response_payment_link_filed = json_decode(getData($db_prefix.'payment_link','WHERE brand_id = :brand_id', '* FROM', $params_pl),true);
                                             foreach($response_payment_link_filed['response'] as $row_paymentfiled){
-                                                $condition = "paymentLinkID = '".$row_paymentfiled['ref']."'"; 
-                                                
-                                                deleteData($db_prefix.'payment_link_field', $condition);
+                                                $condition = "paymentLinkID = :pl_ref"; 
+                                                $plParams = [':pl_ref' => $row_paymentfiled['ref']];
+                                                deleteData($db_prefix.'payment_link_field', $condition, $plParams);
                                             }
 
-                                            $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                            
-                                            deleteData($db_prefix.'payment_link', $condition);
+                                            $condition = "brand_id = :brand_id"; 
+                                            deleteData($db_prefix.'payment_link', $condition, $bCondParams);
 
-                                            $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                            
-                                            deleteData($db_prefix.'permission', $condition);
+                                            $condition = "brand_id = :brand_id"; 
+                                            deleteData($db_prefix.'permission', $condition, $bCondParams);
 
-                                            $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                            
-                                            deleteData($db_prefix.'transaction', $condition);
+                                            $condition = "brand_id = :brand_id"; 
+                                            deleteData($db_prefix.'transaction', $condition, $bCondParams);
 
-                                            $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                            
-                                            deleteData($db_prefix.'webhook_log', $condition);
+                                            $condition = "brand_id = :brand_id"; 
+                                            deleteData($db_prefix.'webhook_log', $condition, $bCondParams);
                                         }
                                     }
                                 }
@@ -1999,7 +2029,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'brands','WHERE brand_id = "'.$ItemID.'" '),true);
+                    $params_b = [':brand_id' => $ItemID];
+                    $response_brand = json_decode(getData($db_prefix.'brands','WHERE brand_id = :brand_id', '* FROM', $params_b),true);
                     if($response_brand['status'] == true){
                         if($response_brand['response'][0]['id'] == 1 || $response_brand['response'][0]['brand_id'] == $global_response_brand['response'][0]['brand_id']){
                             echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => 'Invalid request' , 'csrf_token' => $new_csrf_token]);
@@ -2007,69 +2038,58 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             if($response_brand['response'][0]['id'] == 1 || $response_brand['response'][0]['brand_id'] == $global_response_brand['response'][0]['brand_id']){
                                 echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => 'Invalid request' , 'csrf_token' => $new_csrf_token]);
                             }else{
-                                $condition = "brand_id = '".$ItemID."'"; 
-                                
-                                deleteData($db_prefix.'brands', $condition);
+                                $bId = $response_brand['response'][0]['brand_id'];
+                                $bCondParams = [':brand_id' => $bId];
 
+                                $condition = "brand_id = :brand_id"; 
+                                deleteData($db_prefix.'brands', $condition, $bCondParams);
 
-                                $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                
-                                deleteData($db_prefix.'api', $condition);
+                                $condition = "brand_id = :brand_id"; 
+                                deleteData($db_prefix.'api', $condition, $bCondParams);
 
-                                $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                
-                                deleteData($db_prefix.'currency', $condition);
+                                $condition = "brand_id = :brand_id"; 
+                                deleteData($db_prefix.'currency', $condition, $bCondParams);
 
-                                $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                
-                                deleteData($db_prefix.'customer', $condition);
+                                $condition = "brand_id = :brand_id"; 
+                                deleteData($db_prefix.'customer', $condition, $bCondParams);
 
-                                $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                
-                                deleteData($db_prefix.'env', $condition);
+                                $condition = "brand_id = :brand_id"; 
+                                deleteData($db_prefix.'env', $condition, $bCondParams);
 
-                                $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                
-                                deleteData($db_prefix.'faq', $condition);
+                                $condition = "brand_id = :brand_id"; 
+                                deleteData($db_prefix.'faq', $condition, $bCondParams);
 
-                                $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                
-                                deleteData($db_prefix.'gateways', $condition);
+                                $condition = "brand_id = :brand_id"; 
+                                deleteData($db_prefix.'gateways', $condition, $bCondParams);
 
-                                $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                
-                                deleteData($db_prefix.'gateways_parameter', $condition);
+                                $condition = "brand_id = :brand_id"; 
+                                deleteData($db_prefix.'gateways_parameter', $condition, $bCondParams);
 
-                                $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                
-                                deleteData($db_prefix.'invoice', $condition);
+                                $condition = "brand_id = :brand_id"; 
+                                deleteData($db_prefix.'invoice', $condition, $bCondParams);
 
-                                $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                
-                                deleteData($db_prefix.'invoice_items', $condition);
+                                $condition = "brand_id = :brand_id"; 
+                                deleteData($db_prefix.'invoice_items', $condition, $bCondParams);
 
-                                $response_payment_link_filed = json_decode(getData($db_prefix.'payment_link','WHERE brand_id = "'.$response_brand['response'][0]['brand_id'].'"'),true);
+                                $params_pl = [':brand_id' => $bId];
+                                $response_payment_link_filed = json_decode(getData($db_prefix.'payment_link','WHERE brand_id = :brand_id', '* FROM', $params_pl),true);
                                 foreach($response_payment_link_filed['response'] as $row_paymentfiled){
-                                    $condition = "paymentLinkID = '".$row_paymentfiled['ref']."'"; 
-                                    
-                                    deleteData($db_prefix.'payment_link_field', $condition);
+                                    $condition = "paymentLinkID = :pl_ref"; 
+                                    $plParams = [':pl_ref' => $row_paymentfiled['ref']];
+                                    deleteData($db_prefix.'payment_link_field', $condition, $plParams);
                                 }
 
-                                $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                
-                                deleteData($db_prefix.'payment_link', $condition);
+                                $condition = "brand_id = :brand_id"; 
+                                deleteData($db_prefix.'payment_link', $condition, $bCondParams);
 
-                                $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                
-                                deleteData($db_prefix.'permission', $condition);
+                                $condition = "brand_id = :brand_id"; 
+                                deleteData($db_prefix.'permission', $condition, $bCondParams);
 
-                                $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                
-                                deleteData($db_prefix.'transaction', $condition);
+                                $condition = "brand_id = :brand_id"; 
+                                deleteData($db_prefix.'transaction', $condition, $bCondParams);
 
-                                $condition = "brand_id = '".$response_brand['response'][0]['brand_id']."'"; 
-                                
-                                deleteData($db_prefix.'webhook_log', $condition);
+                                $condition = "brand_id = :brand_id"; 
+                                deleteData($db_prefix.'webhook_log', $condition, $bCondParams);
 
                                 echo json_encode(['status' => 'true', 'title' => 'Brands Deleted', 'message' => 'The selected brand have been deleted successfully.', 'csrf_token' => $new_csrf_token]);
                             }
@@ -2099,7 +2119,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     if($brand_name == "" || $brand_id == ""){
                         echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Please fill in all required fields before proceeding.', 'csrf_token' => $new_csrf_token]);
                     }else{
-                        $response = json_decode(getData($db_prefix.'brands','WHERE brand_id = "'.$brand_id.'"'),true);
+                        $params_b = [':brand_id' => $brand_id];
+                                $response = json_decode(getData($db_prefix.'brands','WHERE brand_id = :brand_id', '* FROM', $params_b),true);
                         if($response['status'] == true){
                             if($response['response'][0]['id'] == 1 || $response['response'][0]['brand_id'] == $global_response_brand['response'][0]['brand_id']){
                                 echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => 'Invalid request' , 'csrf_token' => $new_csrf_token]);
@@ -2107,7 +2128,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             }
 
                             if($response['response'][0]['identify_name'] !== $brand_name){
-                                $responseNameCheck = json_decode(getData($db_prefix.'brands','WHERE identify_name = "'.$brand_name.'"'),true);
+                                $params_nc = [':name' => $brand_name];
+                    $responseNameCheck = json_decode(getData($db_prefix.'brands','WHERE identify_name = :name', '* FROM', $params_nc),true);
                                 if($responseNameCheck['status'] == true){
                                     echo json_encode(['status' => 'false', 'title' => 'Duplicate Brand', 'message' => 'A brand with this name already exists. Please choose a different name.' , 'csrf_token' => $new_csrf_token]);
                                     exit();
@@ -2137,49 +2159,47 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $search_input = escape_string($_POST['search_input'] ?? '');
-                    $show_limit = escape_string($_POST['show_limit'] ?? 5);
+                    $search_input = trim($_POST['search_input'] ?? '');
+                    $show_limit_raw = $_POST['show_limit'] ?? 5;
 
                     /* Filters */
-                    $filter_status = escape_string($_POST['filter_status'] ?? '');
-                    $filter_start  = escape_string($_POST['filter_start'] ?? '');
-                    $filter_end    = escape_string($_POST['filter_end'] ?? '');
+                    $filter_status = trim($_POST['filter_status'] ?? '');
+                    $filter_start  = trim($_POST['filter_start'] ?? '');
+                    $filter_end    = trim($_POST['filter_end'] ?? '');
 
-                    $where = [];
+                    $where = ['status NOT IN (:empty)'];
+                    $params_d = [':empty' => ''];
 
                     if ($filter_start !== '') {
-                        $where[] = "created_date >= '{$filter_start} 00:00:00'";
+                        $where[] = "created_date >= :filter_start";
+                        $params_d[':filter_start'] = "{$filter_start} 00:00:00";
                     }
 
                     if ($filter_end !== '') {
-                        $where[] = "created_date <= '{$filter_end} 23:59:59'";
+                        $where[] = "created_date <= :filter_end";
+                        $params_d[':filter_end'] = "{$filter_end} 23:59:59";
                     }
 
                     if ($filter_status !== '') {
-                        $where[] = "status = '{$filter_status}'";
+                        $where[] = "status = :filter_status";
+                        $params_d[':filter_status'] = $filter_status;
                     }
 
-                    $where_sql = $where ? implode(' AND ', $where) . ' AND ' : '';
+                    if ($search_input !== '') {
+                        $where[] = "(domain LIKE :search)";
+                        $params_d[':search'] = '%' . $search_input . '%';
+                    }
+
+                    $where_sql = 'WHERE ' . implode(' AND ', $where);
                     /* Filters */
 
                     $page = max(1, intval($_POST['page'] ?? 1));
-                    $show_limit = ($_POST['show_limit'] == '') ? 999999 : intval($_POST['show_limit']);
-                    $offset = ($page - 1) * $show_limit;
+                    $show_limit = ($show_limit_raw === '' || $show_limit_raw === 'all') ? 999999 : max(1, min(1000, intval($show_limit_raw)));
+                    $offset = max(0, ($page - 1) * $show_limit);
 
-                    $sql_query = '';
+                    $sql_limit = ($show_limit_raw === 'all') ? '' : " LIMIT " . intval($offset) . ", " . intval($show_limit);
 
-                    if ($search_input !== '') {
-                        $sql_query .= "AND ( domain LIKE '%$search_input%' )";
-                    }
-
-                    $sql_limit = '';
-                    if($show_limit == 'all'){
-
-                    }else{
-                       $sql_limit = " LIMIT $offset, $show_limit";
-                    }
-
-                    $response_result = json_decode(getData($db_prefix.'domain',' WHERE '.$where_sql.' status NOT IN ("") '.$sql_query.' ORDER BY 1 DESC '.$sql_limit),true);
+                    $response_result = json_decode(getData($db_prefix.'domain', $where_sql . ' ORDER BY 1 DESC ' . $sql_limit, '* FROM', $params_d), true);
                     if($response_result['status'] == true){
                         $response = [];
 
@@ -2193,10 +2213,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             ];
                         }
 
-                        $count_data = json_decode(getData($db_prefix.'domain','  '.$sql_query),true);
+                        $count_data = json_decode(getData($db_prefix.'domain', $where_sql, '* FROM', $params_d), true);
 
                         $total_records = count($count_data['response'] ?? []);
-                        $total_pages = ceil($total_records / $show_limit);
+                        $total_pages = ($show_limit > 0) ? (int)ceil($total_records / $show_limit) : 1;
 
                         $pagination = '<ul class="pagination m-0 ms-auto">';
 
@@ -2256,7 +2276,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'domain','WHERE id = "'.$ItemID.'"'),true);
+                    $params_d = [':id' => $ItemID];
+                    $response_brand = json_decode(getData($db_prefix.'domain','WHERE id = :id', '* FROM', $params_d),true);
                     if($response_brand['status'] == true){
                         echo json_encode(['status' => 'true', 'domain' => $response_brand['response'][0]['domain'], 'istatus' => $response_brand['response'][0]['status'], 'csrf_token' => $new_csrf_token]);
                     }else{
@@ -2290,7 +2311,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         if ($domain_name === false) {
                             echo json_encode(['status' => "false", 'title' => 'Invalid Domain', 'message' => 'Please enter a valid domain or domain URL.', 'csrf_token' => $new_csrf_token]);
                         }else{
-                            $response = json_decode(getData($db_prefix.'domain','WHERE domain = "'.$domain_name.'"'),true);
+                            $params_d = [':domain' => $domain_name];
+                        $response = json_decode(getData($db_prefix.'domain','WHERE domain = :domain', '* FROM', $params_d),true);
                             if($response['status'] == false){
                                 $columns = ['domain', 'status', 'created_date', 'updated_date'];
                                 $values = [$domain_name, $domain_status, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
@@ -2332,11 +2354,13 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         if ($domain_name === false) {
                             echo json_encode(['status' => "false", 'title' => 'Invalid Domain', 'message' => 'Please enter a valid domain or domain URL.', 'csrf_token' => $new_csrf_token]);
                         }else{
-                            $response = json_decode(getData($db_prefix.'domain','WHERE id = "'.$domain_id.'"'),true);
+                            $params_d = [':id' => $domain_id];
+                    $response = json_decode(getData($db_prefix.'domain','WHERE id = :id', '* FROM', $params_d),true);
                             if($response['status'] == false){
                                 echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => 'Invalid request' , 'csrf_token' => $new_csrf_token]);
                             }else{
-                                $response = json_decode(getData($db_prefix.'domain','WHERE domain = "'.$domain_name.'"'),true);
+                                $params_d = [':domain' => $domain_name];
+                        $response = json_decode(getData($db_prefix.'domain','WHERE domain = :domain', '* FROM', $params_d),true);
                                 if($response['status'] == true){
                                     if($response['response'][0]['id'] == $domain_id){
 
@@ -2375,7 +2399,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'domain','WHERE id = "'.$ItemID.'" '),true);
+                    $params_d = [':id' => $ItemID];
+                    $response_brand = json_decode(getData($db_prefix.'domain','WHERE id = :id', '* FROM', $params_d),true);
                     if($response_brand['status'] == true){
                         $condition = "id = '".$ItemID."'"; 
                         
@@ -2404,7 +2429,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         foreach ($selected_ids as $id) {
                             $itemID = escape_string($id);
 
-                            $response_brand = json_decode(getData($db_prefix.'domain','WHERE id = "'.$itemID.'" '),true);
+                            $params_d = [':id' => $itemID];
+                    $response_brand = json_decode(getData($db_prefix.'domain','WHERE id = :id', '* FROM', $params_d),true);
                             if($response_brand['status'] == true){
                                 if($actionID == "deleted"){
                                     if (hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'domains', 'delete', $global_user_response['response'][0]['role'])) {
@@ -2566,7 +2592,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     $keyMap = array_flip($keys);
 
                     // Fetch transactions
-                    $response_transaction = json_decode(getData($db_prefix.'transaction',' WHERE brand_id = "'.$global_response_brand['response'][0]['brand_id'].'" AND status NOT IN ("initiated")'), true);
+                    $params_trx = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':initiated' => 'initiated'];
+                    $response_transaction = json_decode(getData($db_prefix.'transaction','WHERE brand_id = :brand_id AND status NOT IN (:initiated)', '* FROM', $params_trx), true);
 
                     foreach ($response_transaction['response'] as $row) {
 
@@ -2698,7 +2725,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     $gatewayLabels = []; // slug => name
 
                     // Get all transactions
-                    $response_transaction = json_decode(getData($db_prefix.'transaction',' WHERE brand_id = "'.$global_response_brand['response'][0]['brand_id'].'" AND status ="completed"'), true);
+                    $params_trx = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':status' => 'completed'];
+                    $response_transaction = json_decode(getData($db_prefix.'transaction','WHERE brand_id = :brand_id AND status = :status', '* FROM', $params_trx), true);
 
                     foreach($response_transaction['response'] as $row){
 
@@ -2722,7 +2750,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         // Get gateway name
                         $gateway_id = $row['gateway_id'];
                         if (!isset($gatewayLabels[$gateway_id])) {
-                            $resGateway = json_decode(getData($db_prefix.'gateways', ' WHERE brand_id = "'.$global_response_brand['response'][0]['brand_id'].'"  AND gateway_id = "'.$gateway_id.'" LIMIT 1'), true);
+                            $params_gw = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':gateway_id' => $gateway_id];
+                    $resGateway = json_decode(getData($db_prefix.'gateways', 'WHERE brand_id = :brand_id AND gateway_id = :gateway_id LIMIT 1', '* FROM', $params_gw), true);
                             $gatewayName = "Unknown"; // default if gateway missing
                             $gatewayColor = '#d3d3d3'; // default light grey for unknown
                             if ($resGateway['status'] && isset($resGateway['response'][0]['name']) && !empty($resGateway['response'][0]['name'])) {
@@ -2914,7 +2943,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                         $currencyRates = [];
 
-                        $currencyRes = json_decode(getData($db_prefix.'currency', ' WHERE brand_id = "'.$brand_id.'"'), true);
+                        $params_rep = [':brand_id' => $brand_id];
+                    $currencyRes = json_decode(getData($db_prefix.'currency', 'WHERE brand_id = :brand_id', '* FROM', $params_rep), true);
                         if (!empty($currencyRes['response'])) {
                             foreach ($currencyRes['response'] as $c) {
                                 $currencyRates[$c['code']] = (string)$c['rate']; 
@@ -2924,7 +2954,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         $global_brand_currency_code = $global_response_brand['response'][0]['currency_code'];
                         $global_brand_currency_rate = "1"; 
 
-                        $res = json_decode(getData($db_prefix.'transaction', " WHERE brand_id='$brand_id' AND status NOT IN ('initiated', 'expired') AND $where"), true);
+                        $params_rep = [':brand_id' => $brand_id, ':init' => 'initiated', ':exp' => 'expired'];
+                    $res = json_decode(getData($db_prefix.'transaction', "WHERE brand_id = :brand_id AND status NOT IN (:init, :exp) AND $where", '* FROM', $params_rep), true);
 
                         $total = 0;
                         $completed = 0;
@@ -2949,7 +2980,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         $successRate = $total ? money_div((string)($completed * 100), (string)$total, 2) : "0";
                         $average = $completed ? money_div($revenue, (string)$completed, 2) : "0";
 
-                        $prevRes = json_decode(getData($db_prefix.'transaction', " WHERE brand_id='$brand_id' AND status NOT IN ('initiated', 'expired') AND $prevWhere"), true);
+                        $params_prev = [':brand_id' => $brand_id, ':init' => 'initiated', ':exp' => 'expired'];
+                    $prevRes = json_decode(getData($db_prefix.'transaction', "WHERE brand_id = :brand_id AND status NOT IN (:init, :exp) AND $prevWhere", '* FROM', $params_prev), true);
 
                         $prevTotal = 0;
                         $prevCompleted = 0;
@@ -2978,56 +3010,53 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $search_input = escape_string($_POST['search_input'] ?? '');
-                    $show_limit = escape_string($_POST['show_limit'] ?? 5);
-
-                    $tabType = escape_string($_POST['tabType'] ?? '');
+                    $search_input = trim($_POST['search_input'] ?? '');
+                    $show_limit_raw = $_POST['show_limit'] ?? 5;
+                    $tabType = trim($_POST['tabType'] ?? '');
 
                     /* Filters */
-                    $filter_status = escape_string($_POST['filter_status'] ?? '');
-                    $filter_start  = escape_string($_POST['filter_start'] ?? '');
-                    $filter_end    = escape_string($_POST['filter_end'] ?? '');
+                    $filter_status = trim($_POST['filter_status'] ?? '');
+                    $filter_start  = trim($_POST['filter_start'] ?? '');
+                    $filter_end    = trim($_POST['filter_end'] ?? '');
 
-                    $where = [];
+                    $where = ['brand_id = :brand_id'];
+                    $params_c = [':brand_id' => $global_response_brand['response'][0]['brand_id']];
 
-                    if ($tabType !== "all") {
-                        $where[] = "inserted_via = '{$tabType}'";
+                    if ($tabType !== '' && $tabType !== 'all') {
+                        $where[] = 'inserted_via = :tab_type';
+                        $params_c[':tab_type'] = $tabType;
                     }
 
                     if ($filter_start !== '') {
-                        $where[] = "created_date >= '{$filter_start} 00:00:00'";
+                        $where[] = 'created_date >= :filter_start';
+                        $params_c[':filter_start'] = "{$filter_start} 00:00:00";
                     }
 
                     if ($filter_end !== '') {
-                        $where[] = "created_date <= '{$filter_end} 23:59:59'";
+                        $where[] = 'created_date <= :filter_end';
+                        $params_c[':filter_end'] = "{$filter_end} 23:59:59";
                     }
 
                     if ($filter_status !== '') {
-                        $where[] = "status = '{$filter_status}'";
+                        $where[] = 'status = :filter_status';
+                        $params_c[':filter_status'] = $filter_status;
                     }
-
-                    $where_sql = $where ? implode(' AND ', $where) . ' AND ' : '';
-                    /* Filters */
-
-
-                    $page = max(1, intval($_POST['page'] ?? 1));
-                    $show_limit = ($_POST['show_limit'] == '') ? 999999 : intval($_POST['show_limit']);
-                    $offset = ($page - 1) * $show_limit;
-
-                    $sql_query = '';
 
                     if ($search_input !== '') {
-                        $sql_query .= " AND ( name LIKE '%$search_input%' OR email LIKE '%$search_input%' OR mobile LIKE '%$search_input%' )";
+                        $where[] = '(name LIKE :search OR email LIKE :search OR mobile LIKE :search)';
+                        $params_c[':search'] = '%' . $search_input . '%';
                     }
 
-                    $sql_limit = '';
-                    if($show_limit == 'all'){
+                    $where_sql = 'WHERE ' . implode(' AND ', $where);
+                    /* Filters */
 
-                    }else{
-                       $sql_limit = " LIMIT $offset, $show_limit";
-                    }
+                    $page = max(1, intval($_POST['page'] ?? 1));
+                    $show_limit = ($show_limit_raw === '' || $show_limit_raw === 'all') ? 999999 : max(1, min(1000, intval($show_limit_raw)));
+                    $offset = max(0, ($page - 1) * $show_limit);
 
-                    $response_result = json_decode(getData($db_prefix.'customer',' WHERE '.$where_sql.' brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '.$sql_query.' ORDER BY 1 DESC '.$sql_limit),true);
+                    $sql_limit = ($show_limit_raw === 'all') ? '' : " LIMIT " . intval($offset) . ", " . intval($show_limit);
+
+                    $response_result = json_decode(getData($db_prefix.'customer', $where_sql . ' ORDER BY 1 DESC ' . $sql_limit, '* FROM', $params_c), true);
                     if($response_result['status'] == true){
                         $response = [];
 
@@ -3044,11 +3073,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             ];
                         }
 
-                        $count_data = json_decode(getData($db_prefix.'customer',' WHERE '.$where_sql.' brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '.$sql_query),true);
-
+                        $count_data = json_decode(getData($db_prefix.'customer', $where_sql, '* FROM', $params_c), true);
 
                         $total_records = count($count_data['response'] ?? []);
-                        $total_pages = ceil($total_records / $show_limit);
+                        $total_pages = ($show_limit > 0) ? (int)ceil($total_records / $show_limit) : 1;
 
                         $pagination = '<ul class="pagination m-0 ms-auto">';
 
@@ -3127,7 +3155,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         }
 
                         if (filter_var($email, FILTER_VALIDATE_EMAIL)) {
-                            $response = json_decode(getData($db_prefix.'customer','WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND email ="'.$email.'"'),true);
+                            $params_c = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':email' => $email];
+                    $response = json_decode(getData($db_prefix.'customer','WHERE brand_id = :brand_id AND email = :email', '* FROM', $params_c),true);
                             if($response['status'] == false){
                                 $ref = generateItemID();
 
@@ -3165,7 +3194,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         foreach ($selected_ids as $id) {
                             $itemID = escape_string($id);
 
-                            $response_brand = json_decode(getData($db_prefix.'customer','WHERE ref = "'.$itemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'"'),true);
+                            $params_c = [':ref' => $itemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_brand = json_decode(getData($db_prefix.'customer','WHERE ref = :ref AND brand_id = :brand_id', '* FROM', $params_c),true);
                             if($response_brand['status'] == true){
                                 if($actionID == "deleted"){
                                     if (hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'customers', 'delete', $global_user_response['response'][0]['role'])) {
@@ -3227,7 +3257,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'customer','WHERE ref = "'.$ItemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '),true);
+                    $params_c = [':ref' => $ItemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_brand = json_decode(getData($db_prefix.'customer','WHERE ref = :ref AND brand_id = :brand_id', '* FROM', $params_c),true);
                     if($response_brand['status'] == true){
                         $condition = "ref = '".$ItemID."'"; 
                         
@@ -3254,7 +3285,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'customer','WHERE ref = "'.$ItemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '),true);
+                    $params_c = [':ref' => $ItemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_brand = json_decode(getData($db_prefix.'customer','WHERE ref = :ref AND brand_id = :brand_id', '* FROM', $params_c),true);
                     if($response_brand['status'] == true){
                         echo json_encode(['status' => 'true', 'name' => $response_brand['response'][0]['name'], 'email' => $response_brand['response'][0]['email'], 'mobile' => $response_brand['response'][0]['mobile'], 'istatus' => $response_brand['response'][0]['status'], 'suspend_reason' => ($response_brand['response'][0]['suspend_reason'] === "--") ? "" : $response_brand['response'][0]['suspend_reason'], 'csrf_token' => $new_csrf_token]);
                     }else{
@@ -3299,12 +3331,14 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Please fill in all required fields before proceeding.', 'csrf_token' => $new_csrf_token]);
                     }else{
                         if (filter_var($email, FILTER_VALIDATE_EMAIL)) {
-                            $response = json_decode(getData($db_prefix.'customer','WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND ref ="'.$customer_id.'"'),true);
+                            $params_c = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':ref' => $customer_id];
+                    $response = json_decode(getData($db_prefix.'customer','WHERE brand_id = :brand_id AND ref = :ref', '* FROM', $params_c),true);
                             if($response['status'] == true){
                                 if($response['response'][0]['email'] == $email){
 
                                 }else{
-                                    $responseCheck = json_decode(getData($db_prefix.'customer','WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND email ="'.$email.'"'),true);
+                                    $params_c = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':email' => $email];
+                    $responseCheck = json_decode(getData($db_prefix.'customer','WHERE brand_id = :brand_id AND email = :email', '* FROM', $params_c),true);
                                     if($responseCheck['status'] == false){
                                         
                                     }else{
@@ -3315,9 +3349,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                                 $columns = ['name', 'email', 'mobile', 'status', 'suspend_reason', 'updated_date'];
                                 $values = [$name, $email, $mobile, $status, $suspend_reason, getCurrentDatetime('Y-m-d H:i:s')];
-                                $condition = "ref = '".$customer_id."'"; 
+                                $condition = "ref = :ref AND brand_id = :brand_id"; 
+                                $conditionParams = [':ref' => $customer_id, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
                                 
-                                updateData($db_prefix.'customer', $columns, $values, $condition);
+                                updateData($db_prefix.'customer', $columns, $values, $condition, $conditionParams);
 
                                 echo json_encode(['status' => 'true', 'title' => 'Customer Updated', 'message' => 'The customer has been updated successfully.', 'csrf_token' => $new_csrf_token]);
                             }else{
@@ -3339,67 +3374,67 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $search_input = escape_string($_POST['search_input'] ?? '');
-                    $show_limit = escape_string($_POST['show_limit'] ?? 5);
-
-                    $tabType = escape_string($_POST['tabType'] ?? '');
+                    $search_input = trim($_POST['search_input'] ?? '');
+                    $show_limit_raw = $_POST['show_limit'] ?? 5;
+                    $tabType = trim($_POST['tabType'] ?? '');
 
                     /* Filters */
-                    $filter_status = escape_string($_POST['filter_status'] ?? '');
-                    $filter_start  = escape_string($_POST['filter_start'] ?? '');
-                    $filter_end    = escape_string($_POST['filter_end'] ?? '');
+                    $filter_status = trim($_POST['filter_status'] ?? '');
+                    $filter_start  = trim($_POST['filter_start'] ?? '');
+                    $filter_end    = trim($_POST['filter_end'] ?? '');
 
-                    $where = [];
+                    $where = ['brand_id = :brand_id'];
+                    $params_inv = [':brand_id' => $global_response_brand['response'][0]['brand_id']];
 
-                    if ($tabType !== "all") {
-                        $where[] = "status = '{$tabType}'";
+                    if ($tabType !== '' && $tabType !== 'all') {
+                        $where[] = 'status = :tab_status';
+                        $params_inv[':tab_status'] = $tabType;
                     }
 
                     if ($filter_start !== '') {
-                        $where[] = "created_date >= '{$filter_start} 00:00:00'";
+                        $where[] = 'created_date >= :filter_start';
+                        $params_inv[':filter_start'] = "{$filter_start} 00:00:00";
                     }
 
                     if ($filter_end !== '') {
-                        $where[] = "created_date <= '{$filter_end} 23:59:59'";
+                        $where[] = 'created_date <= :filter_end';
+                        $params_inv[':filter_end'] = "{$filter_end} 23:59:59";
                     }
 
                     if ($filter_status !== '') {
-                        $where[] = "status = '{$filter_status}'";
+                        $where[] = 'status = :filter_status';
+                        $params_inv[':filter_status'] = $filter_status;
                     }
 
-                    $where_sql = $where ? implode(' AND ', $where) . ' AND ' : '';
+                    if ($search_input !== '') {
+                        $where[] = '(customer_info LIKE :search OR currency LIKE :search)';
+                        $params_inv[':search'] = '%' . $search_input . '%';
+                    }
+
+                    $where_sql = 'WHERE ' . implode(' AND ', $where);
                     /* Filters */
 
                     $page = max(1, intval($_POST['page'] ?? 1));
-                    $show_limit = ($_POST['show_limit'] == '') ? 999999 : intval($_POST['show_limit']);
-                    $offset = ($page - 1) * $show_limit;
+                    $show_limit = ($show_limit_raw === '' || $show_limit_raw === 'all') ? 999999 : max(1, min(1000, intval($show_limit_raw)));
+                    $offset = max(0, ($page - 1) * $show_limit);
 
-                    $sql_query = '';
+                    $sql_limit = ($show_limit_raw === 'all') ? '' : " LIMIT " . intval($offset) . ", " . intval($show_limit);
 
-                    if ($search_input !== '') {
-                        $sql_query .= " AND ( customer_info LIKE '%$search_input%' OR currency LIKE '%$search_input%' )";
-                    }
-
-                    $sql_limit = '';
-                    if($show_limit == 'all'){
-
-                    }else{
-                       $sql_limit = " LIMIT $offset, $show_limit";
-                    }
-
-                    $response_result = json_decode(getData($db_prefix.'invoice',' WHERE '.$where_sql.' brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '.$sql_query.' ORDER BY 1 DESC '.$sql_limit),true);
+                    $response_result = json_decode(getData($db_prefix.'invoice', $where_sql . ' ORDER BY 1 DESC ' . $sql_limit, '* FROM', $params_inv), true);
                     if($response_result['status'] == true){
                         $response = [];
 
                         foreach($response_result['response'] as $row){
                             $customer_info = json_decode($row['customer_info'], true);
 
-                            $response_currency = json_decode(getData($db_prefix.'currency',' WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND code = "'.$row['currency'].'"'),true);
+                            $params_cur = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':code' => $row['currency']];
+                            $response_currency = json_decode(getData($db_prefix.'currency','WHERE brand_id = :brand_id AND code = :code', '* FROM', $params_cur),true);
 
                             $total = "0";
                             $items_count = 0;
 
-                            $response_items = json_decode(getData($db_prefix.'invoice_items', ' WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND invoice_id = "'.$row['ref'].'"'), true);
+                            $params_items = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':invoice_id' => $row['ref']];
+                            $response_items = json_decode(getData($db_prefix.'invoice_items', 'WHERE brand_id = :brand_id AND invoice_id = :invoice_id', '* FROM', $params_items), true);
 
                             if (!empty($response_items['response']) && is_array($response_items['response'])) {
                                 foreach ($response_items['response'] as $items) {
@@ -3435,10 +3470,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             ];
                         }
 
-                        $count_data = json_decode(getData($db_prefix.'invoice',' WHERE '.$where_sql.' brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '.$sql_query),true);
+                        $count_data = json_decode(getData($db_prefix.'invoice', $where_sql, '* FROM', $params_inv), true);
 
                         $total_records = count($count_data['response'] ?? []);
-                        $total_pages = ceil($total_records / $show_limit);
+                        $total_pages = ($show_limit > 0) ? (int)ceil($total_records / $show_limit) : 1;
 
                         $pagination = '<ul class="pagination m-0 ms-auto">';
 
@@ -3542,7 +3577,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         $all_invoices = [];
 
                         foreach ($customer as $customer_id) {
-                            $response = json_decode(getData($db_prefix.'customer','WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND ref ="'.$customer_id.'" OR brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND email ="'.$customer_id.'"'),true);
+                            $custParams = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':customer_id' => $customer_id];
+                            $response = json_decode(getData($db_prefix.'customer','WHERE brand_id = :brand_id AND (ref = :customer_id OR email = :customer_id)', '* FROM', $custParams),true);
                             if($response['status'] == true){
                                 $invoice_id = generateItemID(27, 27);
 
@@ -3678,7 +3714,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     if($currency == "" || $status == "" || $shipping == ""){
                         echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Please fill in all required fields before proceeding.', 'csrf_token' => $new_csrf_token]);
                     }else{
-                        $response = json_decode(getData($db_prefix.'invoice','WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND ref ="'.$invoiceID.'"'),true);
+                        $params_inv = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':ref' => $invoiceID];
+                    $response = json_decode(getData($db_prefix.'invoice','WHERE brand_id = :brand_id AND ref = :ref', '* FROM', $params_inv),true);
                         if($response['status'] == true){
                             $columns = ['currency', 'due_date', 'shipping', 'status', 'note', 'private_note', 'updated_date'];
                             $values = [$currency, $due_date, money_sanitize($shipping), $status, $note, $private_note_content, getCurrentDatetime('Y-m-d H:i:s')];
@@ -3772,7 +3809,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     $invoiceID = escape_string($_POST['invoice-id'] ?? '');
                     $status = escape_string($_POST['status'] ?? '');
 
-                    $response = json_decode(getData($db_prefix.'invoice','WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND ref ="'.$invoiceID.'"'),true);
+                    $params_inv = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':ref' => $invoiceID];
+                    $response = json_decode(getData($db_prefix.'invoice','WHERE brand_id = :brand_id AND ref = :ref', '* FROM', $params_inv),true);
                     if($response['status'] == true){
                         $columns = ['status', 'updated_date'];
                         $values = [$status, getCurrentDatetime('Y-m-d H:i:s')];
@@ -3783,7 +3821,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                         $invoice_items_array = [];
 
-                        $response_items = json_decode(getData($db_prefix.'invoice_items','WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND ref ="'.$invoiceID.'"'),true);
+                        $params_inv = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':ref' => $invoiceID];
+                    $response_items = json_decode(getData($db_prefix.'invoice_items','WHERE brand_id = :brand_id AND ref = :ref', '* FROM', $params_inv),true);
                         foreach($response_items['response'] as $rowItem){
                             $invoice_items_array[] = [
                                 'description' => $rowItem['description'],
@@ -3838,7 +3877,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         foreach ($selected_ids as $id) {
                             $itemID = escape_string($id);
 
-                            $response_brand = json_decode(getData($db_prefix.'invoice','WHERE ref = "'.$itemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'"'),true);
+                            $params_inv = [':ref' => $itemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_brand = json_decode(getData($db_prefix.'invoice','WHERE ref = :ref AND brand_id = :brand_id', '* FROM', $params_inv),true);
                             if($response_brand['status'] == true){
                                 if($actionID == "deleted"){
                                     if (hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'invoice', 'delete', $global_user_response['response'][0]['role'])) {
@@ -3877,7 +3917,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'invoice','WHERE ref = "'.$ItemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'"'),true);
+                    $params_inv = [':ref' => $ItemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_brand = json_decode(getData($db_prefix.'invoice','WHERE ref = :ref AND brand_id = :brand_id', '* FROM', $params_inv),true);
                     if($response_brand['status'] == true){
                         $condition = "invoice_id = '".$ItemID."'"; 
                         
@@ -3901,56 +3942,55 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $search_input = escape_string($_POST['search_input'] ?? '');
-                    $show_limit = escape_string($_POST['show_limit'] ?? 5);
+                    $search_input = trim($_POST['search_input'] ?? '');
+                    $show_limit_raw = $_POST['show_limit'] ?? 5;
 
                     /* Filters */
-                    $filter_status = escape_string($_POST['filter_status'] ?? '');
-                    $filter_start  = escape_string($_POST['filter_start'] ?? '');
-                    $filter_end    = escape_string($_POST['filter_end'] ?? '');
+                    $filter_status = trim($_POST['filter_status'] ?? '');
+                    $filter_start  = trim($_POST['filter_start'] ?? '');
+                    $filter_end    = trim($_POST['filter_end'] ?? '');
 
-                    $where = [];
+                    $where = ['brand_id = :brand_id'];
+                    $params_pl = [':brand_id' => $global_response_brand['response'][0]['brand_id']];
 
                     if ($filter_start !== '') {
-                        $where[] = "created_date >= '{$filter_start} 00:00:00'";
+                        $where[] = 'created_date >= :filter_start';
+                        $params_pl[':filter_start'] = "{$filter_start} 00:00:00";
                     }
 
                     if ($filter_end !== '') {
-                        $where[] = "created_date <= '{$filter_end} 23:59:59'";
+                        $where[] = 'created_date <= :filter_end';
+                        $params_pl[':filter_end'] = "{$filter_end} 23:59:59";
                     }
 
                     if ($filter_status !== '') {
-                        $where[] = "status = '{$filter_status}'";
+                        $where[] = 'status = :filter_status';
+                        $params_pl[':filter_status'] = $filter_status;
                     }
 
-                    $where_sql = $where ? implode(' AND ', $where) . ' AND ' : '';
+                    if ($search_input !== '') {
+                        $where[] = '(product_info LIKE :search)';
+                        $params_pl[':search'] = '%' . $search_input . '%';
+                    }
+
+                    $where_sql = 'WHERE ' . implode(' AND ', $where);
                     /* Filters */
 
                     $page = max(1, intval($_POST['page'] ?? 1));
-                    $show_limit = ($_POST['show_limit'] == '') ? 999999 : intval($_POST['show_limit']);
-                    $offset = ($page - 1) * $show_limit;
+                    $show_limit = ($show_limit_raw === '' || $show_limit_raw === 'all') ? 999999 : max(1, min(1000, intval($show_limit_raw)));
+                    $offset = max(0, ($page - 1) * $show_limit);
 
-                    $sql_query = '';
+                    $sql_limit = ($show_limit_raw === 'all') ? '' : " LIMIT " . intval($offset) . ", " . intval($show_limit);
 
-                    if ($search_input !== '') {
-                        $sql_query .= " AND ( product_info LIKE '%$search_input%' )";
-                    }
-
-                    $sql_limit = '';
-                    if($show_limit == 'all'){
-
-                    }else{
-                       $sql_limit = " LIMIT $offset, $show_limit";
-                    }
-
-                    $response_result = json_decode(getData($db_prefix.'payment_link',' WHERE '.$where_sql.' brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '.$sql_query.' ORDER BY 1 DESC '.$sql_limit),true);
+                    $response_result = json_decode(getData($db_prefix.'payment_link', $where_sql . ' ORDER BY 1 DESC ' . $sql_limit, '* FROM', $params_pl), true);
                     if($response_result['status'] == true){
                         $response = [];
 
                         foreach($response_result['response'] as $row){
                             $product_info = json_decode($row['product_info'], true);
 
-                            $response_currency = json_decode(getData($db_prefix.'currency',' WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND code = "'.$row['currency'].'"'),true);
+                            $params_cur = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':code' => $row['currency']];
+                            $response_currency = json_decode(getData($db_prefix.'currency','WHERE brand_id = :brand_id AND code = :code', '* FROM', $params_cur),true);
 
                             $currency = $response_currency['response'][0]['symbol'] ?? '';
 
@@ -3976,10 +4016,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             ];
                         }
 
-                        $count_data = json_decode(getData($db_prefix.'payment_link',' WHERE '.$where_sql.' brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '.$sql_query),true);
+                        $count_data = json_decode(getData($db_prefix.'payment_link', $where_sql, '* FROM', $params_pl), true);
 
                         $total_records = count($count_data['response'] ?? []);
-                        $total_pages = ceil($total_records / $show_limit);
+                        $total_pages = ($show_limit > 0) ? (int)ceil($total_records / $show_limit) : 1;
 
                         $pagination = '<ul class="pagination m-0 ms-auto">';
 
@@ -4041,7 +4081,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         foreach ($selected_ids as $id) {
                             $itemID = escape_string($id);
 
-                            $response_brand = json_decode(getData($db_prefix.'payment_link','WHERE ref = "'.$itemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'"'),true);
+                            $params_pl = [':ref' => $itemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_brand = json_decode(getData($db_prefix.'payment_link','WHERE ref = :ref AND brand_id = :brand_id', '* FROM', $params_pl),true);
                             if($response_brand['status'] == true){
                                 if($actionID == "deleted"){
                                     if (hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'payment_link', 'delete', $global_user_response['response'][0]['role'])) {
@@ -4106,7 +4147,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'payment_link','WHERE ref = "'.$ItemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'"'),true);
+                    $params_pl = [':ref' => $ItemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_brand = json_decode(getData($db_prefix.'payment_link','WHERE ref = :ref AND brand_id = :brand_id', '* FROM', $params_pl),true);
                     if($response_brand['status'] == true){
                         $condition = "paymentLinkID = '".$ItemID."'"; 
                         
@@ -4307,28 +4349,26 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $search_input = escape_string($_POST['search_input'] ?? '');
-                    $show_limit = escape_string($_POST['show_limit'] ?? 5);
+                    $search_input = trim($_POST['search_input'] ?? '');
+                    $show_limit_raw = $_POST['show_limit'] ?? 5;
 
-
-                    $page = max(1, intval($_POST['page'] ?? 1));
-                    $show_limit = ($_POST['show_limit'] == '') ? 999999 : intval($_POST['show_limit']);
-                    $offset = ($page - 1) * $show_limit;
-
-                    $sql_query = '';
+                    $where = ['brand_id = :brand_id'];
+                    $params_cur = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':curr_code' => $global_brand_currency_code];
 
                     if ($search_input !== '') {
-                        $sql_query .= " AND ( code LIKE '%$search_input%' OR symbol LIKE '%$search_input%' )";
+                        $where[] = '(code LIKE :search OR symbol LIKE :search)';
+                        $params_cur[':search'] = '%' . $search_input . '%';
                     }
 
-                    $sql_limit = '';
-                    if($show_limit == 'all'){
+                    $where_sql = 'WHERE ' . implode(' AND ', $where);
 
-                    }else{
-                       $sql_limit = " LIMIT $offset, $show_limit";
-                    }
+                    $page = max(1, intval($_POST['page'] ?? 1));
+                    $show_limit = ($show_limit_raw === '' || $show_limit_raw === 'all') ? 999999 : max(1, min(1000, intval($show_limit_raw)));
+                    $offset = max(0, ($page - 1) * $show_limit);
 
-                    $response_result = json_decode(getData($db_prefix.'currency',' WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '.$sql_query.' ORDER BY (code = "'.$global_brand_currency_code.'") DESC, id ASC '.$sql_limit),true);
+                    $sql_limit = ($show_limit_raw === 'all') ? '' : " LIMIT " . intval($offset) . ", " . intval($show_limit);
+
+                    $response_result = json_decode(getData($db_prefix.'currency', $where_sql . ' ORDER BY (code = :curr_code) DESC, id ASC ' . $sql_limit, '* FROM', $params_cur), true);
                     if($response_result['status'] == true){
                         $response = [];
 
@@ -4356,10 +4396,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             ];
                         }
 
-                        $count_data = json_decode(getData($db_prefix.'currency',' WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '.$sql_query),true);
+                        $count_data = json_decode(getData($db_prefix.'currency', $where_sql, '* FROM', $params_cur), true);
 
                         $total_records = count($count_data['response'] ?? []);
-                        $total_pages = ceil($total_records / $show_limit);
+                        $total_pages = ($show_limit > 0) ? (int)ceil($total_records / $show_limit) : 1;
 
                         $pagination = '<ul class="pagination m-0 ms-auto">';
 
@@ -4424,7 +4464,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     if($currency_id == "" || $currency_symbol == "" || $currency_rate == ""){
                         echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Please fill in all required fields before proceeding.', 'csrf_token' => $new_csrf_token]);
                     }else{
-                        $response = json_decode(getData($db_prefix.'currency','WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND id ="'.$currency_id.'"'),true);
+                        $params_cur = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':id' => $currency_id];
+                    $response = json_decode(getData($db_prefix.'currency','WHERE brand_id = :brand_id AND id = :id', '* FROM', $params_cur),true);
                         if($response['status'] == true){
                             $columns = ['symbol', 'rate', 'updated_date'];
                             $values = [$currency_symbol, money_sanitize($currency_rate), getCurrentDatetime('Y-m-d H:i:s')];
@@ -4457,7 +4498,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'currency','WHERE id = "'.$ItemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '),true);
+                    $params_cur = [':id' => $ItemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_brand = json_decode(getData($db_prefix.'currency','WHERE id = :id AND brand_id = :brand_id', '* FROM', $params_cur),true);
                     if($response_brand['status'] == true){
                         echo json_encode(['status' => 'true', 'code' => $response_brand['response'][0]['code'], 'symbol' => $response_brand['response'][0]['symbol'], 'rate' => money_sanitize($response_brand['response'][0]['rate']), 'csrf_token' => $new_csrf_token]);
                     }else{
@@ -4487,7 +4529,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     curl_setopt_array($ch, [
                         CURLOPT_RETURNTRANSFER => true,
                         CURLOPT_TIMEOUT => 10,
-                        CURLOPT_SSL_VERIFYPEER => false, // Only if SSL issues, not recommended for production
+                        CURLOPT_SSL_VERIFYPEER => true,
+                        CURLOPT_SSL_VERIFYHOST => 2,
                     ]);
 
                     // Execute cURL
@@ -4505,7 +4548,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     // Loop through each currency
                     foreach ($currencies as $code => $details) {
-                        $response = json_decode(getData($db_prefix.'currency','WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND code ="'.$code.'"'),true);
+                        $params_cur = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':code' => $code];
+                    $response = json_decode(getData($db_prefix.'currency','WHERE brand_id = :brand_id AND code = :code', '* FROM', $params_cur),true);
                         if($response['status'] == false){
                             $columns = ['brand_id', 'code', 'symbol', 'rate', 'created_date', 'updated_date'];
                             $values = [$global_response_brand['response'][0]['brand_id'], $code, $details['symbol_native'], '0', getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
@@ -4534,7 +4578,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'currency','WHERE id = "'.$ItemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'"'),true);
+                    $params_cur = [':id' => $ItemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_brand = json_decode(getData($db_prefix.'currency','WHERE id = :id AND brand_id = :brand_id', '* FROM', $params_cur),true);
                     if($response_brand['status'] == true){
 
                             
@@ -4544,7 +4589,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         curl_setopt_array($ch, [
                             CURLOPT_RETURNTRANSFER => true,
                             CURLOPT_TIMEOUT => 10,
-                            CURLOPT_SSL_VERIFYPEER => false,
+                            CURLOPT_SSL_VERIFYPEER => true,
+                            CURLOPT_SSL_VERIFYHOST => 2,
                         ]);
 
                         $response = curl_exec($ch);
@@ -4607,7 +4653,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     curl_setopt_array($ch, [
                         CURLOPT_RETURNTRANSFER => true,
                         CURLOPT_TIMEOUT => 10,
-                        CURLOPT_SSL_VERIFYPEER => false,
+                        CURLOPT_SSL_VERIFYPEER => true,
+                        CURLOPT_SSL_VERIFYHOST => 2,
                     ]);
 
                     $response = curl_exec($ch);
@@ -4694,49 +4741,47 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $search_input = escape_string($_POST['search_input'] ?? '');
-                    $show_limit = escape_string($_POST['show_limit'] ?? 5);
+                    $search_input = trim($_POST['search_input'] ?? '');
+                    $show_limit_raw = $_POST['show_limit'] ?? 5;
 
                     /* Filters */
-                    $filter_status = escape_string($_POST['filter_status'] ?? '');
-                    $filter_start  = escape_string($_POST['filter_start'] ?? '');
-                    $filter_end    = escape_string($_POST['filter_end'] ?? '');
+                    $filter_status = trim($_POST['filter_status'] ?? '');
+                    $filter_start  = trim($_POST['filter_start'] ?? '');
+                    $filter_end    = trim($_POST['filter_end'] ?? '');
 
-                    $where = [];
+                    $where = ['brand_id = :brand_id'];
+                    $params_faq = [':brand_id' => $global_response_brand['response'][0]['brand_id']];
 
                     if ($filter_start !== '') {
-                        $where[] = "created_date >= '{$filter_start} 00:00:00'";
+                        $where[] = 'created_date >= :filter_start';
+                        $params_faq[':filter_start'] = "{$filter_start} 00:00:00";
                     }
 
                     if ($filter_end !== '') {
-                        $where[] = "created_date <= '{$filter_end} 23:59:59'";
+                        $where[] = 'created_date <= :filter_end';
+                        $params_faq[':filter_end'] = "{$filter_end} 23:59:59";
                     }
 
                     if ($filter_status !== '') {
-                        $where[] = "status = '{$filter_status}'";
+                        $where[] = 'status = :filter_status';
+                        $params_faq[':filter_status'] = $filter_status;
                     }
 
-                    $where_sql = $where ? implode(' AND ', $where) . ' AND ' : '';
+                    if ($search_input !== '') {
+                        $where[] = '(title LIKE :search OR description LIKE :search)';
+                        $params_faq[':search'] = '%' . $search_input . '%';
+                    }
+
+                    $where_sql = 'WHERE ' . implode(' AND ', $where);
                     /* Filters */
 
                     $page = max(1, intval($_POST['page'] ?? 1));
-                    $show_limit = ($_POST['show_limit'] == '') ? 999999 : intval($_POST['show_limit']);
-                    $offset = ($page - 1) * $show_limit;
+                    $show_limit = ($show_limit_raw === '' || $show_limit_raw === 'all') ? 999999 : max(1, min(1000, intval($show_limit_raw)));
+                    $offset = max(0, ($page - 1) * $show_limit);
 
-                    $sql_query = '';
+                    $sql_limit = ($show_limit_raw === 'all') ? '' : " LIMIT " . intval($offset) . ", " . intval($show_limit);
 
-                    if ($search_input !== '') {
-                        $sql_query .= " AND ( title LIKE '%$search_input%' OR description LIKE '%$search_input%' )";
-                    }
-
-                    $sql_limit = '';
-                    if($show_limit == 'all'){
-
-                    }else{
-                       $sql_limit = " LIMIT $offset, $show_limit";
-                    }
-
-                    $response_result = json_decode(getData($db_prefix.'faq',' WHERE '.$where_sql.' brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '.$sql_query.' ORDER BY 1 DESC '.$sql_limit),true);
+                    $response_result = json_decode(getData($db_prefix.'faq', $where_sql . ' ORDER BY 1 DESC ' . $sql_limit, '* FROM', $params_faq), true);
                     if($response_result['status'] == true){
                         $response = [];
 
@@ -4751,10 +4796,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             ];
                         }
 
-                        $count_data = json_decode(getData($db_prefix.'faq',' WHERE '.$where_sql.' brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '.$sql_query),true);
+                        $count_data = json_decode(getData($db_prefix.'faq', $where_sql, '* FROM', $params_faq), true);
 
                         $total_records = count($count_data['response'] ?? []);
-                        $total_pages = ceil($total_records / $show_limit);
+                        $total_pages = ($show_limit > 0) ? (int)ceil($total_records / $show_limit) : 1;
 
                         $pagination = '<ul class="pagination m-0 ms-auto">';
 
@@ -4845,7 +4890,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'faq','WHERE id = "'.$ItemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '),true);
+                    $params_f = [':id' => $ItemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_brand = json_decode(getData($db_prefix.'faq','WHERE id = :id AND brand_id = :brand_id', '* FROM', $params_f),true);
                     if($response_brand['status'] == true){
                         echo json_encode(['status' => 'true', 'title' => $response_brand['response'][0]['title'], 'description' => $response_brand['response'][0]['description'], 'fstatus' => $response_brand['response'][0]['status'], 'csrf_token' => $new_csrf_token]);
                     }else{
@@ -4876,7 +4922,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     if($faq_id == "" || $faq_title == "" || $faq_description == "" || $faq_status == ""){
                         echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Please fill in all required fields before proceeding.', 'csrf_token' => $new_csrf_token]);
                     }else{
-                        $response_faq = json_decode(getData($db_prefix.'faq','WHERE id = "'.$faq_id.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'"'),true);
+                        $params_f = [':id' => $faq_id, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_faq = json_decode(getData($db_prefix.'faq','WHERE id = :id AND brand_id = :brand_id', '* FROM', $params_f),true);
                         if($response_faq['status'] == true){
 
                             $columns = [ 'title', 'description', 'status', 'updated_date'];
@@ -4916,7 +4963,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         foreach ($selected_ids as $id) {
                             $itemID = escape_string($id);
 
-                            $response_brand = json_decode(getData($db_prefix.'faq','WHERE id = "'.$itemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'"'),true);
+                            $params_f = [':id' => $itemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_brand = json_decode(getData($db_prefix.'faq','WHERE id = :id AND brand_id = :brand_id', '* FROM', $params_f),true);
                             if($response_brand['status'] == true){
                                 if($actionID == "deleted"){
                                     if (hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'faq_settings', 'delete', $global_user_response['response'][0]['role'])) {
@@ -4975,7 +5023,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'faq','WHERE id = "'.$ItemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'"'),true);
+                    $params_f = [':id' => $ItemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_brand = json_decode(getData($db_prefix.'faq','WHERE id = :id AND brand_id = :brand_id', '* FROM', $params_f),true);
                     if($response_brand['status'] == true){
                         $condition = "id = '".$ItemID."'"; 
                         
@@ -5013,7 +5062,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     if($api_name == ""){
                         echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Please fill in all required fields before proceeding.', 'csrf_token' => $new_csrf_token]);
                     }else{
-                        $response = json_decode(getData($db_prefix.'api','WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND name ="'.$api_name.'"'),true);
+                        $params_a = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':name' => $api_name];
+                    $response = json_decode(getData($db_prefix.'api','WHERE brand_id = :brand_id AND name = :name', '* FROM', $params_a),true);
                         if($response['status'] == true){
                             echo json_encode(['status' => 'false', 'title' => 'API Name Already Exists', 'message' => 'This API name is already in use. Please choose a different name.' , 'csrf_token' => $new_csrf_token]);
                         }else{
@@ -5034,9 +5084,13 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             $columns = ['brand_id', 'name', 'api_key', 'expired_date', 'status', 'api_scopes', 'created_date', 'updated_date'];
                             $values = [$global_response_brand['response'][0]['brand_id'], $api_name, $api_key, $apiExpiryDate, $api_status, $scopes_json, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
 
-                            insertData($db_prefix.'api', $columns, $values);
+                            $inserted = insertData($db_prefix.'api', $columns, $values);
 
-                            echo json_encode(['status' => 'true', 'title' => 'Api Created', 'message' => 'The api has been created successfully.', 'csrf_token' => $new_csrf_token]);
+                            if ($inserted) {
+                                echo json_encode(['status' => 'true', 'title' => 'Api Created', 'message' => 'The api has been created successfully.', 'api_key' => $api_key, 'csrf_token' => $new_csrf_token]);
+                            } else {
+                                echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => 'Failed to create API key.', 'csrf_token' => $new_csrf_token]);
+                            }
                         }
                     }
                 }else{
@@ -5056,49 +5110,47 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $search_input = escape_string($_POST['search_input'] ?? '');
-                    $show_limit = escape_string($_POST['show_limit'] ?? 5);
+                    $search_input = trim($_POST['search_input'] ?? '');
+                    $show_limit_raw = $_POST['show_limit'] ?? 5;
 
                     /* Filters */
-                    $filter_status = escape_string($_POST['filter_status'] ?? '');
-                    $filter_start  = escape_string($_POST['filter_start'] ?? '');
-                    $filter_end    = escape_string($_POST['filter_end'] ?? '');
+                    $filter_status = trim($_POST['filter_status'] ?? '');
+                    $filter_start  = trim($_POST['filter_start'] ?? '');
+                    $filter_end    = trim($_POST['filter_end'] ?? '');
 
-                    $where = [];
+                    $where = ['brand_id = :brand_id'];
+                    $params_api = [':brand_id' => $global_response_brand['response'][0]['brand_id']];
 
                     if ($filter_start !== '') {
-                        $where[] = "created_date >= '{$filter_start} 00:00:00'";
+                        $where[] = 'created_date >= :filter_start';
+                        $params_api[':filter_start'] = "{$filter_start} 00:00:00";
                     }
 
                     if ($filter_end !== '') {
-                        $where[] = "created_date <= '{$filter_end} 23:59:59'";
+                        $where[] = 'created_date <= :filter_end';
+                        $params_api[':filter_end'] = "{$filter_end} 23:59:59";
                     }
 
                     if ($filter_status !== '') {
-                        $where[] = "status = '{$filter_status}'";
+                        $where[] = 'status = :filter_status';
+                        $params_api[':filter_status'] = $filter_status;
                     }
 
-                    $where_sql = $where ? implode(' AND ', $where) . ' AND ' : '';
+                    if ($search_input !== '') {
+                        $where[] = '(name LIKE :search)';
+                        $params_api[':search'] = '%' . $search_input . '%';
+                    }
+
+                    $where_sql = 'WHERE ' . implode(' AND ', $where);
                     /* Filters */
 
                     $page = max(1, intval($_POST['page'] ?? 1));
-                    $show_limit = ($_POST['show_limit'] == '') ? 999999 : intval($_POST['show_limit']);
-                    $offset = ($page - 1) * $show_limit;
+                    $show_limit = ($show_limit_raw === '' || $show_limit_raw === 'all') ? 999999 : max(1, min(1000, intval($show_limit_raw)));
+                    $offset = max(0, ($page - 1) * $show_limit);
 
-                    $sql_query = '';
+                    $sql_limit = ($show_limit_raw === 'all') ? '' : " LIMIT " . intval($offset) . ", " . intval($show_limit);
 
-                    if ($search_input !== '') {
-                        $sql_query .= " AND ( name LIKE '%$search_input%' )";
-                    }
-
-                    $sql_limit = '';
-                    if($show_limit == 'all'){
-
-                    }else{
-                       $sql_limit = " LIMIT $offset, $show_limit";
-                    }
-
-                    $response_result = json_decode(getData($db_prefix.'api',' WHERE '.$where_sql.' brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '.$sql_query.' ORDER BY 1 DESC '.$sql_limit),true);
+                    $response_result = json_decode(getData($db_prefix.'api', $where_sql . ' ORDER BY 1 DESC ' . $sql_limit, '* FROM', $params_api), true);
                     if($response_result['status'] == true){
                         $response = [];
 
@@ -5116,7 +5168,7 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             $response[] = [
                                 "id"    => $row['id'],
                                 "name"  => $row['name'],
-                                "api_key"  => $row['api_key'],
+                                "api_key"  => mask_api_key($row['api_key']),
                                 "expired_date"  => $row['expired_date'],
                                 "status"  => $status,
                                 "created_date"     => convertUTCtoUserTZ($row['created_date'], ($global_response_brand['response'][0]['timezone'] === '--' || $global_response_brand['response'][0]['timezone'] === '') ? 'Asia/Dhaka' : $global_response_brand['response'][0]['timezone'], "M d, Y h:i A"),
@@ -5124,10 +5176,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             ];
                         }
 
-                        $count_data = json_decode(getData($db_prefix.'api',' WHERE '.$where_sql.' brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '.$sql_query),true);
+                        $count_data = json_decode(getData($db_prefix.'api', $where_sql, '* FROM', $params_api), true);
 
                         $total_records = count($count_data['response'] ?? []);
-                        $total_pages = ceil($total_records / $show_limit);
+                        $total_pages = ($show_limit > 0) ? (int)ceil($total_records / $show_limit) : 1;
 
                         $pagination = '<ul class="pagination m-0 ms-auto">';
 
@@ -5192,7 +5244,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'api','WHERE id = "'.$ItemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '),true);
+                    $params_a = [':id' => $ItemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_brand = json_decode(getData($db_prefix.'api','WHERE id = :id AND brand_id = :brand_id', '* FROM', $params_a),true);
                     if($response_brand['status'] == true){
                         echo json_encode(['status' => 'true', 'name' => $response_brand['response'][0]['name'], 'expired_date' => $response_brand['response'][0]['expired_date'], 'api_scopes' => json_decode($response_brand['response'][0]['api_scopes'], true), 'astatus' => $response_brand['response'][0]['status'], 'csrf_token' => $new_csrf_token]);
                     }else{
@@ -5223,7 +5276,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         foreach ($selected_ids as $id) {
                             $itemID = escape_string($id);
 
-                            $response_brand = json_decode(getData($db_prefix.'api','WHERE id = "'.$itemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'"'),true);
+                            $params_a = [':id' => $itemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_brand = json_decode(getData($db_prefix.'api','WHERE id = :id AND brand_id = :brand_id', '* FROM', $params_a),true);
                             if($response_brand['status'] == true){
                                 if($actionID == "deleted"){
                                     if (hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'api_settings', 'delete', $global_user_response['response'][0]['role'])) {
@@ -5289,7 +5343,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'api','WHERE id = "'.$ItemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '),true);
+                    $params_a = [':id' => $ItemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_brand = json_decode(getData($db_prefix.'api','WHERE id = :id AND brand_id = :brand_id', '* FROM', $params_a),true);
                     if($response_brand['status'] == true){
                         $condition = "id = '".$ItemID."'"; 
                         
@@ -5329,9 +5384,11 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     if($api_name == "" || $api_status == ""){
                         echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Please fill in all required fields before proceeding.', 'csrf_token' => $new_csrf_token]);
                     }else{
-                        $responseApi = json_decode(getData($db_prefix.'api','WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND id ="'.$api_id.'"'),true);
+                        $params_a = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':id' => $api_id];
+                    $responseApi = json_decode(getData($db_prefix.'api','WHERE brand_id = :brand_id AND id = :id', '* FROM', $params_a),true);
                         if($responseApi['status'] == true){
-                            $response = json_decode(getData($db_prefix.'api','WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND name ="'.$api_name.'"'),true);
+                            $params_a = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':name' => $api_name];
+                    $response = json_decode(getData($db_prefix.'api','WHERE brand_id = :brand_id AND name = :name', '* FROM', $params_a),true);
                             if($response['status'] == true){
                                 if($response['response'][0]['id'] == $api_id){
 
@@ -5456,54 +5513,50 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $search_input = escape_string($_POST['search_input'] ?? '');
-                    $show_limit = escape_string($_POST['show_limit'] ?? 5);
+                    $search_input = trim($_POST['search_input'] ?? '');
+                    $show_limit_raw = $_POST['show_limit'] ?? 5;
 
                     /* Filters */
-                    $filter_status = escape_string($_POST['filter_status'] ?? '');
-                    $filter_start  = escape_string($_POST['filter_start'] ?? '');
-                    $filter_end    = escape_string($_POST['filter_end'] ?? '');
+                    $filter_status = trim($_POST['filter_status'] ?? '');
+                    $filter_start  = trim($_POST['filter_start'] ?? '');
+                    $filter_end    = trim($_POST['filter_end'] ?? '');
 
-                    $where = [];
+                    $where = ['status = :status'];
+                    $params_dev = [':status' => 'used'];
 
                     if ($filter_start !== '') {
-                        $where[] = "created_date >= '{$filter_start} 00:00:00'";
+                        $where[] = 'created_date >= :filter_start';
+                        $params_dev[':filter_start'] = "{$filter_start} 00:00:00";
                     }
 
                     if ($filter_end !== '') {
-                        $where[] = "created_date <= '{$filter_end} 23:59:59'";
+                        $where[] = 'created_date <= :filter_end';
+                        $params_dev[':filter_end'] = "{$filter_end} 23:59:59";
                     }
 
                     if ($filter_status !== '') {
                         if ($filter_status === 'connected') {
-                            $where[] = "updated_date >= (NOW() - INTERVAL 6 MINUTE)";
+                            $where[] = 'updated_date >= (NOW() - INTERVAL 6 MINUTE)';
                         } elseif ($filter_status === 'disconnected') {
-                            $where[] = "updated_date < (NOW() - INTERVAL 6 MINUTE)";
+                            $where[] = 'updated_date < (NOW() - INTERVAL 6 MINUTE)';
                         }
                     }
-                    
-                    $where_sql = $where ? implode(' AND ', $where) . ' AND ' : '';
-                    /* Filters */
-
-
-                    $page = max(1, intval($_POST['page'] ?? 1));
-                    $show_limit = ($_POST['show_limit'] == '') ? 999999 : intval($_POST['show_limit']);
-                    $offset = ($page - 1) * $show_limit;
-
-                    $sql_query = '';
 
                     if ($search_input !== '') {
-                        $sql_query .= " AND ( name LIKE '%$search_input%' OR model LIKE '%$search_input%' OR android_level LIKE '%$search_input%' )";
+                        $where[] = '(name LIKE :search OR model LIKE :search OR android_level LIKE :search)';
+                        $params_dev[':search'] = '%' . $search_input . '%';
                     }
 
-                    $sql_limit = '';
-                    if($show_limit == 'all'){
+                    $where_sql = 'WHERE ' . implode(' AND ', $where);
+                    /* Filters */
 
-                    }else{
-                       $sql_limit = " LIMIT $offset, $show_limit";
-                    }
+                    $page = max(1, intval($_POST['page'] ?? 1));
+                    $show_limit = ($show_limit_raw === '' || $show_limit_raw === 'all') ? 999999 : max(1, min(1000, intval($show_limit_raw)));
+                    $offset = max(0, ($page - 1) * $show_limit);
 
-                    $response_result = json_decode(getData($db_prefix.'device',' WHERE '.$where_sql.' status ="used" '.$sql_query.' ORDER BY 1 DESC '.$sql_limit),true);
+                    $sql_limit = ($show_limit_raw === 'all') ? '' : " LIMIT " . intval($offset) . ", " . intval($show_limit);
+
+                    $response_result = json_decode(getData($db_prefix.'device', $where_sql . ' ORDER BY 1 DESC ' . $sql_limit, '* FROM', $params_dev), true);
                     if($response_result['status'] == true){
                         $response = [];
 
@@ -5520,11 +5573,11 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             ];
                         }
 
-                        $count_data = json_decode(getData($db_prefix.'device',' WHERE '.$where_sql.' status ="used" '.$sql_query),true);
+                        $count_data = json_decode(getData($db_prefix.'device', $where_sql, '* FROM', $params_dev), true);
 
 
                         $total_records = count($count_data['response'] ?? []);
-                        $total_pages = ceil($total_records / $show_limit);
+                        $total_pages = ($show_limit > 0) ? (int)ceil($total_records / $show_limit) : 1;
 
                         $pagination = '<ul class="pagination m-0 ms-auto">';
 
@@ -5584,7 +5637,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'device','WHERE device_id = "'.$ItemID.'"'),true);
+                    $params_dev = [':device_id' => $ItemID];
+                    $response_brand = json_decode(getData($db_prefix.'device','WHERE device_id = :device_id', '* FROM', $params_dev),true);
                     if($response_brand['status'] == true){
                         $condition = "device_id = '".$ItemID."'"; 
                         
@@ -5616,7 +5670,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         foreach ($selected_ids as $id) {
                             $itemID = escape_string($id);
 
-                            $response_brand = json_decode(getData($db_prefix.'device','WHERE device_id = "'.$itemID.'"'),true);
+                            $params_dev = [':device_id' => $itemID];
+                    $response_brand = json_decode(getData($db_prefix.'device','WHERE device_id = :device_id', '* FROM', $params_dev),true);
                             if($response_brand['status'] == true){
                                 if($actionID == "deleted"){
                                     if (hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'device', 'delete', $global_user_response['response'][0]['role'])) {
@@ -5660,7 +5715,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     ensureDeviceTableColumns();
 
-                    $response_brand = json_decode(getData($db_prefix.'device','WHERE status = "processing" AND d_id = "'.$pp_admin.'"'),true);
+                    $params_dev = [':status' => 'processing', ':d_id' => $pp_admin];
+                    $response_brand = json_decode(getData($db_prefix.'device','WHERE status = :status AND d_id = :d_id', '* FROM', $params_dev),true);
 
                     $now = time();
                     if ($response_brand['status'] == true && !empty($response_brand['response'])) {
@@ -5716,51 +5772,48 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $d_id = escape_string($_POST['d_id'] ?? '');
-                    $search_input = escape_string($_POST['search_input'] ?? '');
-                    $show_limit = escape_string($_POST['show_limit'] ?? 5);
+                    $d_id = trim($_POST['d_id'] ?? '');
+                    $search_input = trim($_POST['search_input'] ?? '');
+                    $show_limit_raw = $_POST['show_limit'] ?? 5;
 
                     /* Filters */
-                    $filter_status = escape_string($_POST['filter_status'] ?? '');
-                    $filter_start  = escape_string($_POST['filter_start'] ?? '');
-                    $filter_end    = escape_string($_POST['filter_end'] ?? '');
+                    $filter_status = trim($_POST['filter_status'] ?? '');
+                    $filter_start  = trim($_POST['filter_start'] ?? '');
+                    $filter_end    = trim($_POST['filter_end'] ?? '');
 
-                    $where = [];
+                    $where = ['device_id = :device_id', 'status NOT IN (:status_ex)'];
+                    $params_bv = [':device_id' => $d_id, ':status_ex' => '--'];
 
                     if ($filter_start !== '') {
-                        $where[] = "created_date >= '{$filter_start} 00:00:00'";
+                        $where[] = 'created_date >= :filter_start';
+                        $params_bv[':filter_start'] = "{$filter_start} 00:00:00";
                     }
 
                     if ($filter_end !== '') {
-                        $where[] = "created_date <= '{$filter_end} 23:59:59'";
+                        $where[] = 'created_date <= :filter_end';
+                        $params_bv[':filter_end'] = "{$filter_end} 23:59:59";
                     }
 
                     if ($filter_status !== '') {
-                        $where[] = "status = '{$filter_status}'";
+                        $where[] = 'status = :filter_status';
+                        $params_bv[':filter_status'] = $filter_status;
                     }
-                    
-                    $where_sql = $where ? implode(' AND ', $where) . ' AND ' : '';
-                    /* Filters */
-
-
-                    $page = max(1, intval($_POST['page'] ?? 1));
-                    $show_limit = ($_POST['show_limit'] == '') ? 999999 : intval($_POST['show_limit']);
-                    $offset = ($page - 1) * $show_limit;
-
-                    $sql_query = '';
 
                     if ($search_input !== '') {
-                        $sql_query .= " AND ( sender_key LIKE '%$search_input%' OR type LIKE '%$search_input%' OR current_balance LIKE '%$search_input%' )";
+                        $where[] = '(sender_key LIKE :search OR type LIKE :search OR current_balance LIKE :search)';
+                        $params_bv[':search'] = '%' . $search_input . '%';
                     }
 
-                    $sql_limit = '';
-                    if($show_limit == 'all'){
+                    $where_sql = 'WHERE ' . implode(' AND ', $where);
+                    /* Filters */
 
-                    }else{
-                       $sql_limit = " LIMIT $offset, $show_limit";
-                    }
+                    $page = max(1, intval($_POST['page'] ?? 1));
+                    $show_limit = ($show_limit_raw === '' || $show_limit_raw === 'all') ? 999999 : max(1, min(1000, intval($show_limit_raw)));
+                    $offset = max(0, ($page - 1) * $show_limit);
 
-                    $response_result = json_decode(getData($db_prefix.'balance_verification',' WHERE '.$where_sql.' device_id = "'.$d_id.'" AND status NOT IN ("--") '.$sql_query.' ORDER BY 1 DESC '.$sql_limit),true);
+                    $sql_limit = ($show_limit_raw === 'all') ? '' : " LIMIT " . intval($offset) . ", " . intval($show_limit);
+
+                    $response_result = json_decode(getData($db_prefix.'balance_verification', $where_sql . ' ORDER BY 1 DESC ' . $sql_limit, '* FROM', $params_bv), true);
                     if($response_result['status'] == true){
                         $response = [];
 
@@ -5787,11 +5840,11 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             ];
                         }
 
-                        $count_data = json_decode(getData($db_prefix.'balance_verification',' WHERE '.$where_sql.' status NOT IN ("--") '.$sql_query),true);
+                        $count_data = json_decode(getData($db_prefix.'balance_verification', $where_sql, '* FROM', $params_bv), true);
 
 
                         $total_records = count($count_data['response'] ?? []);
-                        $total_pages = ceil($total_records / $show_limit);
+                        $total_pages = ($show_limit > 0) ? (int)ceil($total_records / $show_limit) : 1;
 
                         $pagination = '<ul class="pagination m-0 ms-auto">';
 
@@ -5852,7 +5905,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         foreach ($selected_ids as $id) {
                             $itemID = escape_string($id);
 
-                            $response_brand = json_decode(getData($db_prefix.'balance_verification','WHERE id = "'.$itemID.'"'),true);
+                            $params_bv = [':id' => $itemID];
+                    $response_brand = json_decode(getData($db_prefix.'balance_verification','WHERE id = :id', '* FROM', $params_bv),true);
                             if($response_brand['status'] == true){
                                 if($actionID == "deleted"){
                                     if (hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'device', 'balance_verification_for', $global_user_response['response'][0]['role'])) {
@@ -5913,7 +5967,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'balance_verification','WHERE id = "'.$ItemID.'"'),true);
+                    $params_bv = [':id' => $ItemID];
+                    $response_brand = json_decode(getData($db_prefix.'balance_verification','WHERE id = :id', '* FROM', $params_bv),true);
                     if($response_brand['status'] == true){
                         $condition = "id = '".$ItemID."'"; 
                         
@@ -5955,9 +6010,11 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             exit();
                         }
 
-                        $response = json_decode(getData($db_prefix.'device','WHERE device_id ="'.$d_id.'" AND status ="used"'),true);
+                        $params_dev = [':device_id' => $d_id, ':status' => 'used'];
+                    $response = json_decode(getData($db_prefix.'device','WHERE device_id = :device_id AND status = :status', '* FROM', $params_dev),true);
                         if($response['status'] == true){
-                            $responseCheck = json_decode(getData($db_prefix.'balance_verification','WHERE device_id ="'.$d_id.'" AND sender_key ="'.$sender_key.'" AND type ="'.$payment_type.'"'),true);
+                            $params_bv = [':device_id' => $d_id, ':sender_key' => $sender_key, ':type' => $payment_type];
+                    $responseCheck = json_decode(getData($db_prefix.'balance_verification','WHERE device_id = :device_id AND sender_key = :sender_key AND type = :type', '* FROM', $params_bv),true);
                             if($responseCheck['status'] == true){
                                 echo json_encode(['status' => 'false', 'title' => 'Duplicate Entry', 'message' => 'A record with this info already exists.' , 'csrf_token' => $new_csrf_token]);
                                 exit();
@@ -5993,7 +6050,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
                     $balance = escape_string($_POST['balance'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'balance_verification','WHERE id = "'.$ItemID.'"'),true);
+                    $params_bv = [':id' => $ItemID];
+                    $response_brand = json_decode(getData($db_prefix.'balance_verification','WHERE id = :id', '* FROM', $params_bv),true);
                     if($response_brand['status'] == true){
                         if($balance == ""){
                             $balance = 0;
@@ -6026,7 +6084,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'balance_verification','WHERE id = "'.$ItemID.'"'),true);
+                    $params_bv = [':id' => $ItemID];
+                    $response_brand = json_decode(getData($db_prefix.'balance_verification','WHERE id = :id', '* FROM', $params_bv),true);
                     if($response_brand['status'] == true){
                         echo json_encode(['status' => 'true', 'sender_key' => $response_brand['response'][0]['sender_key'], 'type' => $response_brand['response'][0]['type'], 'current_balance' => money_round($response_brand['response'][0]['current_balance'], 2), 'simslot' => $response_brand['response'][0]['simslot'], 'istatus' => $response_brand['response'][0]['status'], 'csrf_token' => $new_csrf_token]);
                     }else{
@@ -6066,9 +6125,11 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             exit();
                         }
 
-                        $response = json_decode(getData($db_prefix.'balance_verification','WHERE id ="'.$itemID.'"'),true);
+                        $params_bv = [':id' => $itemID];
+                    $response = json_decode(getData($db_prefix.'balance_verification','WHERE id = :id', '* FROM', $params_bv),true);
                         if($response['status'] == true){
-                            $responseCheck = json_decode(getData($db_prefix.'balance_verification','WHERE device_id ="'.$response['response'][0]['device_id'].'" AND sender_key ="'.$sender_key.'" AND type ="'.$payment_type.'"'),true);
+                            $params_bv = [':device_id' => $response['response'][0]['device_id'], ':sender_key' => $sender_key, ':type' => $payment_type];
+                    $responseCheck = json_decode(getData($db_prefix.'balance_verification','WHERE device_id = :device_id AND sender_key = :sender_key AND type = :type', '* FROM', $params_bv),true);
                             if($responseCheck['status'] == true){
                                 if($responseCheck['response'][0]['id'] == $itemID){
 
@@ -6102,62 +6163,60 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $search_input = escape_string($_POST['search_input'] ?? '');
-                    $show_limit = escape_string($_POST['show_limit'] ?? 5);
-
-                    $tabType = escape_string($_POST['tabType'] ?? '');
+                    $search_input = trim($_POST['search_input'] ?? '');
+                    $show_limit_raw = $_POST['show_limit'] ?? 5;
+                    $tabType = trim($_POST['tabType'] ?? '');
 
                     /* Filters */
-                    $filter_status = escape_string($_POST['filter_status'] ?? '');
-                    $filter_start  = escape_string($_POST['filter_start'] ?? '');
-                    $filter_end    = escape_string($_POST['filter_end'] ?? '');
+                    $filter_status = trim($_POST['filter_status'] ?? '');
+                    $filter_start  = trim($_POST['filter_start'] ?? '');
+                    $filter_end    = trim($_POST['filter_end'] ?? '');
 
-                    $where = [];
+                    $where = ['device_id NOT IN (:dev_ex)', 'status NOT IN (:stat_ex)'];
+                    $params_sd = [':dev_ex' => '00', ':stat_ex' => 'error'];
 
-                    if ($tabType !== "all") {
-                        $where[] = "status = '{$tabType}'";
+                    if ($tabType !== '' && $tabType !== 'all') {
+                        $where[] = 'status = :tab_status';
+                        $params_sd[':tab_status'] = $tabType;
                     }
 
                     if ($filter_start !== '') {
-                        $where[] = "created_date >= '{$filter_start} 00:00:00'";
+                        $where[] = 'created_date >= :filter_start';
+                        $params_sd[':filter_start'] = "{$filter_start} 00:00:00";
                     }
 
                     if ($filter_end !== '') {
-                        $where[] = "created_date <= '{$filter_end} 23:59:59'";
+                        $where[] = 'created_date <= :filter_end';
+                        $params_sd[':filter_end'] = "{$filter_end} 23:59:59";
                     }
 
                     if ($filter_status !== '') {
-                        $where[] = "status = '{$filter_status}'";
+                        $where[] = 'status = :filter_status';
+                        $params_sd[':filter_status'] = $filter_status;
                     }
-
-                    $where_sql = $where ? implode(' AND ', $where) . ' AND ' : '';
-                    /* Filters */
-
-
-                    $page = max(1, intval($_POST['page'] ?? 1));
-                    $show_limit = ($_POST['show_limit'] == '') ? 999999 : intval($_POST['show_limit']);
-                    $offset = ($page - 1) * $show_limit;
-
-                    $sql_query = '';
 
                     if ($search_input !== '') {
-                        $sql_query .= " AND ( sender_key LIKE '%$search_input%' OR amount LIKE '%$search_input%' OR currency LIKE '%$search_input%' OR trx_id LIKE '%$search_input%' OR message LIKE '%$search_input%' )";
+                        $where[] = '(sender_key LIKE :search OR amount LIKE :search OR currency LIKE :search OR trx_id LIKE :search OR message LIKE :search)';
+                        $params_sd[':search'] = '%' . $search_input . '%';
                     }
 
-                    $sql_limit = '';
-                    if($show_limit == 'all'){
+                    $where_sql = 'WHERE ' . implode(' AND ', $where);
+                    /* Filters */
 
-                    }else{
-                       $sql_limit = " LIMIT $offset, $show_limit";
-                    }
+                    $page = max(1, intval($_POST['page'] ?? 1));
+                    $show_limit = ($show_limit_raw === '' || $show_limit_raw === 'all') ? 999999 : max(1, min(1000, intval($show_limit_raw)));
+                    $offset = max(0, ($page - 1) * $show_limit);
 
-                    $response_result = json_decode(getData($db_prefix.'sms_data',' WHERE '.$where_sql.' device_id NOT IN ("00") AND status NOT IN ("error") '.$sql_query.' ORDER BY 1 DESC '.$sql_limit),true);
+                    $sql_limit = ($show_limit_raw === 'all') ? '' : " LIMIT " . intval($offset) . ", " . intval($show_limit);
+
+                    $response_result = json_decode(getData($db_prefix.'sms_data', $where_sql . ' ORDER BY 1 DESC ' . $sql_limit, '* FROM', $params_sd), true);
                     if($response_result['status'] == true){
                         $response = [];
 
                         foreach($response_result['response'] as $row){
                             $device_name = '';
-                            $response_device = json_decode(getData($db_prefix.'device',' WHERE device_id = "'.$row['device_id'].'"'),true);
+                            $params_dev = [':device_id' => $row['device_id']];
+                            $response_device = json_decode(getData($db_prefix.'device','WHERE device_id = :device_id', '* FROM', $params_dev),true);
                             if($response_device['status'] == true){
                                 $device_name = $response_device['response'][0]['name'];
                             }
@@ -6187,11 +6246,11 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             ];
                         }
 
-                        $count_data = json_decode(getData($db_prefix.'sms_data',' WHERE '.$where_sql.' device_id NOT IN ("00") AND status NOT IN ("error") '.$sql_query),true);
+                        $count_data = json_decode(getData($db_prefix.'sms_data', $where_sql, '* FROM', $params_sd), true);
 
 
                         $total_records = count($count_data['response'] ?? []);
-                        $total_pages = ceil($total_records / $show_limit);
+                        $total_pages = ($show_limit > 0) ? (int)ceil($total_records / $show_limit) : 1;
 
                         $pagination = '<ul class="pagination m-0 ms-auto">';
 
@@ -6251,7 +6310,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'sms_data','WHERE id = "'.$ItemID.'"'),true);
+                    $params_sms = [':id' => $ItemID];
+                    $response_brand = json_decode(getData($db_prefix.'sms_data','WHERE id = :id', '* FROM', $params_sms),true);
                     if($response_brand['status'] == true){
                         $condition = "id = '".$ItemID."'"; 
                         
@@ -6279,7 +6339,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         foreach ($selected_ids as $id) {
                             $itemID = escape_string($id);
 
-                            $response_brand = json_decode(getData($db_prefix.'sms_data','WHERE id = "'.$itemID.'"'),true);
+                            $params_sms = [':id' => $itemID];
+                    $response_brand = json_decode(getData($db_prefix.'sms_data','WHERE id = :id', '* FROM', $params_sms),true);
                             if($response_brand['status'] == true){
                                 if($actionID == "deleted"){
                                     if (hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'sms_data', 'delete', $global_user_response['response'][0]['role'])) {
@@ -6450,7 +6511,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'sms_data','WHERE id = "'.$ItemID.'"'),true);
+                    $params_sms = [':id' => $ItemID];
+                    $response_brand = json_decode(getData($db_prefix.'sms_data','WHERE id = :id', '* FROM', $params_sms),true);
                     if($response_brand['status'] == true){
                         echo json_encode(['status' => 'true', 'device_id' => $response_brand['response'][0]['device_id'], 'sender_key' => $response_brand['response'][0]['sender_key'], 'number' => $response_brand['response'][0]['number'], 'amount' => money_round($response_brand['response'][0]['amount'], 2),  'currency' => $response_brand['response'][0]['currency'],  'trx_id' => $response_brand['response'][0]['trx_id'],  'balance' => money_round($response_brand['response'][0]['balance'], 2),  'message' => $response_brand['response'][0]['message'],  'type' => $response_brand['response'][0]['type'],  'entry_type' => $response_brand['response'][0]['entry_type'],  'istatus' => $response_brand['response'][0]['status'],  'reason' => $response_brand['response'][0]['reason'], 'csrf_token' => $new_csrf_token]);
                     }else{
@@ -6484,7 +6546,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     $transaction_id = escape_string($_POST['transaction_id'] ?? '');
                     $currency = escape_string($_POST['currency'] ?? '');
 
-                    $responseV = json_decode(getData($db_prefix.'sms_data','WHERE id ="'.$itemid.'"'),true);
+                    $params_sms = [':id' => $itemid];
+                    $responseV = json_decode(getData($db_prefix.'sms_data','WHERE id = :id', '* FROM', $params_sms),true);
                     if($responseV['status'] == false){
                         echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => 'Invalid request' , 'csrf_token' => $new_csrf_token]);
                         exit();
@@ -6712,66 +6775,66 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $search_input = escape_string($_POST['search_input'] ?? '');
-                    $show_limit = escape_string($_POST['show_limit'] ?? 5);
-
-                    $tabType = escape_string($_POST['tabType'] ?? '');
+                    $search_input = trim($_POST['search_input'] ?? '');
+                    $show_limit_raw = $_POST['show_limit'] ?? 5;
+                    $tabType = trim($_POST['tabType'] ?? '');
 
                     /* Filters */
-                    $filter_status = escape_string($_POST['filter_status'] ?? '');
-                    $filter_start  = escape_string($_POST['filter_start'] ?? '');
-                    $filter_end    = escape_string($_POST['filter_end'] ?? '');
+                    $filter_status = trim($_POST['filter_status'] ?? '');
+                    $filter_start  = trim($_POST['filter_start'] ?? '');
+                    $filter_end    = trim($_POST['filter_end'] ?? '');
 
-                    $where = [];
+                    $where = ['brand_id = :brand_id', 'status NOT IN (:init)'];
+                    $params_trx = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':init' => 'initiated'];
 
-                    if ($tabType !== "all") {
-                        $where[] = "status = '{$tabType}'";
+                    if ($tabType !== '' && $tabType !== 'all') {
+                        $where[] = 'status = :tab_status';
+                        $params_trx[':tab_status'] = $tabType;
                     }
 
                     if ($filter_start !== '') {
-                        $where[] = "created_date >= '{$filter_start} 00:00:00'";
+                        $where[] = 'created_date >= :filter_start';
+                        $params_trx[':filter_start'] = "{$filter_start} 00:00:00";
                     }
 
                     if ($filter_end !== '') {
-                        $where[] = "created_date <= '{$filter_end} 23:59:59'";
+                        $where[] = 'created_date <= :filter_end';
+                        $params_trx[':filter_end'] = "{$filter_end} 23:59:59";
                     }
 
                     if ($filter_status !== '') {
-                        $where[] = "status = '{$filter_status}'";
+                        $where[] = 'status = :filter_status';
+                        $params_trx[':filter_status'] = $filter_status;
                     }
 
-                    $where_sql = $where ? implode(' AND ', $where) . ' AND ' : '';
+                    if ($search_input !== '') {
+                        $where[] = '(customer_info LIKE :search OR trx_id LIKE :search OR gateway_slug LIKE :search OR sender LIKE :search)';
+                        $params_trx[':search'] = '%' . $search_input . '%';
+                    }
+
+                    $where_sql = 'WHERE ' . implode(' AND ', $where);
                     /* Filters */
 
                     $page = max(1, intval($_POST['page'] ?? 1));
-                    $show_limit = ($_POST['show_limit'] == '') ? 999999 : intval($_POST['show_limit']);
-                    $offset = ($page - 1) * $show_limit;
+                    $show_limit = ($show_limit_raw === '' || $show_limit_raw === 'all') ? 999999 : max(1, min(1000, intval($show_limit_raw)));
+                    $offset = max(0, ($page - 1) * $show_limit);
 
-                    $sql_query = '';
+                    $sql_limit = ($show_limit_raw === 'all') ? '' : " LIMIT " . intval($offset) . ", " . intval($show_limit);
 
-                    if ($search_input !== '') {
-                        $sql_query .= " AND ( customer_info LIKE '%$search_input%' OR trx_id LIKE '%$search_input%' OR gateway_slug LIKE '%$search_input%' OR sender LIKE '%$search_input%' )";
-                    }
-
-                    $sql_limit = '';
-                    if($show_limit == 'all'){
-
-                    }else{
-                       $sql_limit = " LIMIT $offset, $show_limit";
-                    }
-
-                    $response_result = json_decode(getData($db_prefix.'transaction',' WHERE '.$where_sql.' brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND status NOT IN ("initiated") '.$sql_query.' ORDER BY 1 DESC '.$sql_limit),true);
+                    $response_result = json_decode(getData($db_prefix.'transaction', $where_sql . ' ORDER BY 1 DESC ' . $sql_limit, '* FROM', $params_trx), true);
                     if($response_result['status'] == true){
                         $response = [];
 
                         foreach($response_result['response'] as $row){
                             $customer_info = json_decode($row['customer_info'], true);
 
-                            $response_currency = json_decode(getData($db_prefix.'currency',' WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND code = "'.$row['currency'].'"'),true);
+                            $params_cur = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':code' => $row['currency']];
+                            $response_currency = json_decode(getData($db_prefix.'currency','WHERE brand_id = :brand_id AND code = :code', '* FROM', $params_cur),true);
 
                             $currency = $response_currency['response'][0]['symbol'] ?? '';
 
-                            $response_gateway = json_decode(getData($db_prefix.'gateways',' WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND gateway_id = "'.$row['gateway_id'].'"'),true);
+                            $params_gw = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':gateway_id' => $row['gateway_id']];
+                            $response_gateway = json_decode(getData($db_prefix.'gateways','WHERE brand_id = :brand_id AND gateway_id = :gateway_id', '* FROM', $params_gw),true);
 
                             $gateway = $response_gateway['response'][0]['name'] ?? '';
 
@@ -6782,14 +6845,14 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             $net = money_sub(money_add($amount, $processing_fee), $discount);
 
                             $response[] = [
-                                "id"    => $row['ref'],
-                                "c_id"   => $customer_info['id']     ?? 'N/A',
-                                "name"   => $customer_info['name']   ?? 'Unknown',
-                                "email"   => $customer_info['email']  ?? '',
-                                "mobile"  => $customer_info['mobile'] ?? '',
-                                "status"  => $row['status'],
-                                "gateway"  => $gateway,
-                                "trx_id"  => ($row['trx_id'] == '--' || $row['trx_id'] == '') ? '': $row['trx_id'],
+                                "id"         => $row['ref'],
+                                "c_id"       => $customer_info['id']     ?? 'N/A',
+                                "name"       => $customer_info['name']   ?? 'Unknown',
+                                "email"      => $customer_info['email']  ?? '',
+                                "mobile"     => $customer_info['mobile'] ?? '',
+                                "status"     => $row['status'],
+                                "gateway"    => $gateway,
+                                "trx_id"     => ($row['trx_id'] == '--' || $row['trx_id'] == '') ? '': $row['trx_id'],
                                 "net_amount" => $currency . money_round($net, 2),
                                 "amount"     => $currency . money_round($amount, 2),
                                 "created_date"     => convertUTCtoUserTZ($row['created_date'], ($global_response_brand['response'][0]['timezone'] === '--' || $global_response_brand['response'][0]['timezone'] === '') ? 'Asia/Dhaka' : $global_response_brand['response'][0]['timezone'], "M d, Y h:i A"),
@@ -6797,10 +6860,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             ];
                         }
 
-                        $count_data = json_decode(getData($db_prefix.'transaction',' WHERE '.$where_sql.' brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND status NOT IN ("initiated") '.$sql_query),true);
+                        $count_data = json_decode(getData($db_prefix.'transaction', $where_sql, '* FROM', $params_trx), true);
 
                         $total_records = count($count_data['response'] ?? []);
-                        $total_pages = ceil($total_records / $show_limit);
+                        $total_pages = ($show_limit > 0) ? (int)ceil($total_records / $show_limit) : 1;
 
                         $pagination = '<ul class="pagination m-0 ms-auto">';
 
@@ -6865,15 +6928,17 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             $failed = [];
 
                             foreach ($selected_ids as $id) {
-                                $itemID = escape_string($id);
+                                $itemID = $id;
 
-                                $response_brand = json_decode(getData($db_prefix.'transaction','WHERE ref = "'.$itemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'"'),true);
+                                $txParams = [':ref' => $itemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                                $response_brand = json_decode(getData($db_prefix.'transaction','WHERE ref = :ref AND brand_id = :brand_id', '* FROM', $txParams),true);
                                 if($response_brand['status'] == true){
                                     if($actionID == "deleted"){
                                         if (hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'transaction', 'delete', $global_user_response['response'][0]['role'])) {
-                                            $condition = "ref = '".$itemID."'"; 
+                                            $condition = "ref = :ref AND brand_id = :brand_id"; 
+                                            $conditionParams = [':ref' => $itemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
                                             
-                                            deleteData($db_prefix.'transaction', $condition);
+                                            deleteData($db_prefix.'transaction', $condition, $conditionParams);
                                         }
                                     }
 
@@ -6882,9 +6947,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                             $columns = ['status', 'updated_date'];
                                             $values = ['completed', getCurrentDatetime('Y-m-d H:i:s')];
 
-                                            $condition = "ref = '".$itemID."'"; 
+                                            $condition = "ref = :ref AND brand_id = :brand_id"; 
+                                            $conditionParams = [':ref' => $itemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
                                             
-                                            updateData($db_prefix.'transaction', $columns, $values, $condition);
+                                            updateData($db_prefix.'transaction', $columns, $values, $condition, $conditionParams);
                                         }
                                     }
 
@@ -6905,22 +6971,28 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                             $response_gateway_info = json_decode(getData($db_prefix.'gateways','WHERE gateway_id = :gateway_id AND brand_id = :brand_id', '* FROM', $params),true);
                                             $gateway_slug = $response_gateway_info['response'][0]['slug'] ?? '';
 
-                                            if ($gateway_slug === 'bkash-api-tokenized') {
-                                                $refundPayload = [
-                                                    'amount' => money_round($transactionRow['local_net_amount']),
-                                                    'sku' => $transactionRow['ref'],
-                                                    'reason' => 'Admin refund'
+                                            if ($gateway_slug !== 'bkash-api-tokenized') {
+                                                $failed[] = [
+                                                    'ref' => $itemID,
+                                                    'message' => 'Automatic refund is not supported for this gateway.'
                                                 ];
+                                                continue;
+                                            }
 
-                                                $refundResult = pp_bkash_tokenized_refund($transactionRow, $refundPayload);
+                                            $refundPayload = [
+                                                'amount' => money_round($transactionRow['local_net_amount']),
+                                                'sku' => $transactionRow['ref'],
+                                                'reason' => 'Admin refund'
+                                            ];
 
-                                                if (empty($refundResult['status'])) {
-                                                    $failed[] = [
-                                                        'ref' => $itemID,
-                                                        'message' => $refundResult['message'] ?? 'Refund failed.'
-                                                    ];
-                                                    continue;
-                                                }
+                                            $refundResult = pp_bkash_tokenized_refund($transactionRow, $refundPayload);
+
+                                            if (empty($refundResult['status'])) {
+                                                $failed[] = [
+                                                    'ref' => $itemID,
+                                                    'message' => $refundResult['message'] ?? 'Refund failed.'
+                                                ];
+                                                continue;
                                             }
 
                                             $source_info = json_decode($transactionRow['source_info'], true) ?: [];
@@ -6954,8 +7026,9 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                                 $response_brand['response'][0]['source_info'] = json_encode($source_info, JSON_UNESCAPED_UNICODE);
                                             }
 
-                                            $condition = "ref = '".$itemID."'"; 
-                                            updateData($db_prefix.'transaction', $columns, $values, $condition);
+                                            $condition = "ref = :ref AND brand_id = :brand_id"; 
+                                            $conditionParams = [':ref' => $itemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                                            updateData($db_prefix.'transaction', $columns, $values, $condition, $conditionParams);
 
                                             $response_brand['response'][0]['status'] = 'refunded';
                                         }
@@ -6966,9 +7039,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                             $columns = ['status', 'updated_date'];
                                             $values = ['canceled', getCurrentDatetime('Y-m-d H:i:s')];
 
-                                            $condition = "ref = '".$itemID."'"; 
+                                            $condition = "ref = :ref AND brand_id = :brand_id"; 
+                                            $conditionParams = [':ref' => $itemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
                                             
-                                            updateData($db_prefix.'transaction', $columns, $values, $condition);
+                                            updateData($db_prefix.'transaction', $columns, $values, $condition, $conditionParams);
                                         }
                                     }
 
@@ -6981,7 +7055,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                             }else{
                                                 $metadata = json_decode($response_brand['response'][0]['metadata'], true) ?: [];
 
-                                                $response_gateway = json_decode(getData($db_prefix.'gateways',' WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND gateway_id = "'.$response_brand['response'][0]['gateway_id'].'"'),true);
+                                                $params_gw = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':gateway_id' => $response_brand['response'][0]['gateway_id']];
+                    $response_gateway = json_decode(getData($db_prefix.'gateways','WHERE brand_id = :brand_id AND gateway_id = :gateway_id', '* FROM', $params_gw),true);
 
                                                 $gateway = $response_gateway['response'][0]['name'] ?? '';
 
@@ -7023,7 +7098,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                     if($actionID == "refunded" || $actionID == "canceled" || $actionID == "approved"){
                                         $metadata = json_decode($response_brand['response'][0]['metadata'], true) ?: [];
 
-                                        $response_gateway = json_decode(getData($db_prefix.'gateways',' WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND gateway_id = "'.$response_brand['response'][0]['gateway_id'].'"'),true);
+                                        $params_gw = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':gateway_id' => $response_brand['response'][0]['gateway_id']];
+                    $response_gateway = json_decode(getData($db_prefix.'gateways','WHERE brand_id = :brand_id AND gateway_id = :gateway_id', '* FROM', $params_gw),true);
 
                                         $gateway = $response_gateway['response'][0]['name'] ?? '';
 
@@ -7110,13 +7186,15 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $ItemID = escape_string($_POST['ItemID'] ?? '');
+                    $ItemID = $_POST['ItemID'] ?? '';
 
-                    $response_brand = json_decode(getData($db_prefix.'transaction','WHERE ref = "'.$ItemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'"'),true);
+                    $txParams = [':ref' => $ItemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_brand = json_decode(getData($db_prefix.'transaction','WHERE ref = :ref AND brand_id = :brand_id', '* FROM', $txParams),true);
                     if($response_brand['status'] == true){
-                        $condition = "ref = '".$ItemID."'"; 
+                        $condition = "ref = :ref AND brand_id = :brand_id"; 
+                        $conditionParams = [':ref' => $ItemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
                         
-                        deleteData($db_prefix.'transaction', $condition);
+                        deleteData($db_prefix.'transaction', $condition, $conditionParams);
                     }
 
                     echo json_encode(['status' => 'true', 'title' => 'Transaction Deleted', 'message' => 'The selected Transaction have been deleted successfully.', 'csrf_token' => $new_csrf_token]);
@@ -7137,13 +7215,15 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $ItemID = escape_string($_POST['ItemID'] ?? '');
+                    $ItemID = $_POST['ItemID'] ?? '';
 
-                    $response_brand = json_decode(getData($db_prefix.'transaction','WHERE ref = "'.$ItemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'"'),true);
+                    $txParams = [':ref' => $ItemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_brand = json_decode(getData($db_prefix.'transaction','WHERE ref = :ref AND brand_id = :brand_id', '* FROM', $txParams),true);
                     if($response_brand['status'] == true){
                         $metadata = json_decode($response_brand['response'][0]['metadata'], true) ?: [];
 
-                        $response_gateway = json_decode(getData($db_prefix.'gateways',' WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND gateway_id = "'.$response_brand['response'][0]['gateway_id'].'"'),true);
+                        $params_gw = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':gateway_id' => $response_brand['response'][0]['gateway_id']];
+                    $response_gateway = json_decode(getData($db_prefix.'gateways','WHERE brand_id = :brand_id AND gateway_id = :gateway_id', '* FROM', $params_gw),true);
 
                         $gateway = $response_gateway['response'][0]['name'] ?? '';
 
@@ -7254,9 +7334,11 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             $latest_code = $channel_data['latest_version_code'];
 
                             $latest_hash = '';
+                            $latest_signature = '';
                             foreach ($channel_data['versions'] as $version) {
                                 if ($version['version_code'] === $latest_code) {
-                                    $latest_hash = $version['checksum'];
+                                    $latest_hash = $version['checksum'] ?? ($version['sha256'] ?? '');
+                                    $latest_signature = $version['signature'] ?? '';
                                     break;
                                 }
                             }
@@ -7269,6 +7351,7 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         if($update_available == true){
                             set_env('last-update-version-name', $latest_name);
                             set_env('last-update-version-hash', $latest_hash);
+                            set_env('last-update-version-signature', $latest_signature);
                             set_env('last-update-version', $latest_code);
 
                             echo json_encode(['status' => 'true', 'title' => 'Update Available', 'message' => 'A new system update is available. Please update to get the latest features and improvements.', 'csrf_token' => $new_csrf_token]);
@@ -7367,6 +7450,7 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                         $lasted_update_version = get_env('last-update-version');
                         $lasted_update_version_hash = get_env('last-update-version-hash');
+                        $lasted_update_version_signature = get_env('last-update-version-signature');
 
                         if (version_compare($lasted_update_version, $piprapay_current_version['version_code'], '>')) {
                             $update_available = true;
@@ -7380,12 +7464,13 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             $tempDir   = $storage . "temp/$lasted_update_version/";
                             $zipFile   = $storage . "updates/$lasted_update_version.zip";
 
-                            if (sha1_file($zipFile) !== $lasted_update_version_hash) {
-                                echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => 'Update file checksum mismatch! Possible corruption or tampering.' , 'csrf_token' => $new_csrf_token]);
+                            $verifyRes = verify_update_authenticity($zipFile, (string)$lasted_update_version_hash, (string)$lasted_update_version_signature);
+                            if ($verifyRes['status'] === false) {
+                                echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => $verifyRes['message'], 'csrf_token' => $new_csrf_token]);
                                 exit();
                             }
 
-                            @mkdir($backupDir, 0755, true);
+                            ensureBackupDirProtected($backupDir);
                             @mkdir($tempDir, 0755, true);
 
                             zipFolder($root, "$backupDir/".$piprapay_current_version['version_code'].".zip");
@@ -7593,55 +7678,53 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $search_input = escape_string($_POST['search_input'] ?? '');
-                    $show_limit = escape_string($_POST['show_limit'] ?? 5);
-
-                    $tabType = escape_string($_POST['tabType'] ?? '');
+                    $search_input = trim($_POST['search_input'] ?? '');
+                    $show_limit_raw = $_POST['show_limit'] ?? 5;
+                    $tabType = trim($_POST['tabType'] ?? '');
 
                     /* Filters */
-                    $filter_status = escape_string($_POST['filter_status'] ?? '');
-                    $filter_start  = escape_string($_POST['filter_start'] ?? '');
-                    $filter_end    = escape_string($_POST['filter_end'] ?? '');
+                    $filter_status = trim($_POST['filter_status'] ?? '');
+                    $filter_start  = trim($_POST['filter_start'] ?? '');
+                    $filter_end    = trim($_POST['filter_end'] ?? '');
 
-                    $where = [];
+                    $where = ['brand_id = :brand_id'];
+                    $params_gw = [':brand_id' => $global_response_brand['response'][0]['brand_id']];
 
-                    if ($tabType !== "all") {
-                        $where[] = "tab = '{$tabType}'";
+                    if ($tabType !== '' && $tabType !== 'all') {
+                        $where[] = 'tab = :tab_type';
+                        $params_gw[':tab_type'] = $tabType;
                     }
 
                     if ($filter_start !== '') {
-                        $where[] = "created_date >= '{$filter_start} 00:00:00'";
+                        $where[] = 'created_date >= :filter_start';
+                        $params_gw[':filter_start'] = "{$filter_start} 00:00:00";
                     }
 
                     if ($filter_end !== '') {
-                        $where[] = "created_date <= '{$filter_end} 23:59:59'";
+                        $where[] = 'created_date <= :filter_end';
+                        $params_gw[':filter_end'] = "{$filter_end} 23:59:59";
                     }
 
                     if ($filter_status !== '') {
-                        $where[] = "status = '{$filter_status}'";
+                        $where[] = 'status = :filter_status';
+                        $params_gw[':filter_status'] = $filter_status;
                     }
 
-                    $where_sql = $where ? implode(' AND ', $where) . ' AND ' : '';
+                    if ($search_input !== '') {
+                        $where[] = '(name LIKE :search OR display LIKE :search)';
+                        $params_gw[':search'] = '%' . $search_input . '%';
+                    }
+
+                    $where_sql = 'WHERE ' . implode(' AND ', $where);
                     /* Filters */
 
                     $page = max(1, intval($_POST['page'] ?? 1));
-                    $show_limit = ($_POST['show_limit'] == '') ? 999999 : intval($_POST['show_limit']);
-                    $offset = ($page - 1) * $show_limit;
+                    $show_limit = ($show_limit_raw === '' || $show_limit_raw === 'all') ? 999999 : max(1, min(1000, intval($show_limit_raw)));
+                    $offset = max(0, ($page - 1) * $show_limit);
 
-                    $sql_query = '';
+                    $sql_limit = ($show_limit_raw === 'all') ? '' : " LIMIT " . intval($offset) . ", " . intval($show_limit);
 
-                    if ($search_input !== '') {
-                        $sql_query .= " AND ( name LIKE '%$search_input%' OR display LIKE '%$search_input%' )";
-                    }
-
-                    $sql_limit = '';
-                    if($show_limit == 'all'){
-
-                    }else{
-                       $sql_limit = " LIMIT $offset, $show_limit";
-                    }
-
-                    $response_result = json_decode(getData($db_prefix.'gateways',' WHERE '.$where_sql.' brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '.$sql_query.' ORDER BY 1 DESC '.$sql_limit),true);
+                    $response_result = json_decode(getData($db_prefix.'gateways', $where_sql . ' ORDER BY 1 DESC ' . $sql_limit, '* FROM', $params_gw), true);
                     if($response_result['status'] == true){
                         $response = [];
 
@@ -7655,10 +7738,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             ];
                         }
 
-                        $count_data = json_decode(getData($db_prefix.'gateways',' WHERE '.$where_sql.' brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '.$sql_query),true);
+                        $count_data = json_decode(getData($db_prefix.'gateways', $where_sql, '* FROM', $params_gw), true);
 
                         $total_records = count($count_data['response'] ?? []);
-                        $total_pages = ceil($total_records / $show_limit);
+                        $total_pages = ($show_limit > 0) ? (int)ceil($total_records / $show_limit) : 1;
 
                         $pagination = '<ul class="pagination m-0 ms-auto">';
 
@@ -7718,7 +7801,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'gateways','WHERE gateway_id = "'.$ItemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '),true);
+                    $params_gw = [':gateway_id' => $ItemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_brand = json_decode(getData($db_prefix.'gateways','WHERE gateway_id = :gateway_id AND brand_id = :brand_id', '* FROM', $params_gw),true);
                     if($response_brand['status'] == true){
                         $condition = "gateway_id = '".$ItemID."'"; 
                         
@@ -7750,7 +7834,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         foreach ($selected_ids as $id) {
                             $itemID = escape_string($id);
 
-                            $response_brand = json_decode(getData($db_prefix.'gateways','WHERE gateway_id = "'.$itemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'"'),true);
+                            $params_gw = [':gateway_id' => $itemID, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+                    $response_brand = json_decode(getData($db_prefix.'gateways','WHERE gateway_id = :gateway_id AND brand_id = :brand_id', '* FROM', $params_gw),true);
                             if($response_brand['status'] == true){
                                 if($actionID == "deleted"){
                                     if (hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'gateways', 'delete', $global_user_response['response'][0]['role'])) {
@@ -7836,7 +7921,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         if($gateway_id == "" || $display_name == "" || $min_amount == "" || $max_amount == "" || $fixed_charge == "" || $percentage_charge == "" || $fixed_discount == "" || $percentage_discount == "" || $primary_color == "" || $text_color == "" || $btn_color == "" || $btn_text_color == ""){
                             echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Please fill in all required fields before proceeding.', 'csrf_token' => $new_csrf_token]);
                         }else{
-                            $response = json_decode(getData($db_prefix.'gateways','WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND gateway_id ="'.$gateway_id.'"'),true);
+                            $params_gw = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':gateway_id' => $gateway_id];
+                    $response = json_decode(getData($db_prefix.'gateways','WHERE brand_id = :brand_id AND gateway_id = :gateway_id', '* FROM', $params_gw),true);
                             if($response['status'] == true){
                                 $max_file_size = 2 * 1024 * 1024; 
                                 
@@ -7893,7 +7979,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                                 foreach ($configData as $optionName => $optionValue) {
 
-                                    $response_optionValue = json_decode(getData($db_prefix.'gateways_parameter','WHERE gateway_id = "'.$gateway_id.'" AND brand_id = "'.$global_response_brand['response'][0]['brand_id'].'" AND option_name = "'.$optionName.'"'),true);
+                                    $params_gwp = [':gateway_id' => $gateway_id, ':brand_id' => $global_response_brand['response'][0]['brand_id'], ':option_name' => $optionName];
+                    $response_optionValue = json_decode(getData($db_prefix.'gateways_parameter','WHERE gateway_id = :gateway_id AND brand_id = :brand_id AND option_name = :option_name', '* FROM', $params_gwp),true);
 
                                     if(isset($response_optionValue['response'][0]['value'])){
                                         $columns = ['value', 'updated_date'];
@@ -8068,49 +8155,47 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         exit();
                     }
 
-                    $search_input = escape_string($_POST['search_input'] ?? '');
-                    $show_limit = escape_string($_POST['show_limit'] ?? 5);
+                    $search_input = trim($_POST['search_input'] ?? '');
+                    $show_limit_raw = $_POST['show_limit'] ?? 5;
 
                     /* Filters */
-                    $filter_status = escape_string($_POST['filter_status'] ?? '');
-                    $filter_start  = escape_string($_POST['filter_start'] ?? '');
-                    $filter_end    = escape_string($_POST['filter_end'] ?? '');
+                    $filter_status = trim($_POST['filter_status'] ?? '');
+                    $filter_start  = trim($_POST['filter_start'] ?? '');
+                    $filter_end    = trim($_POST['filter_end'] ?? '');
 
-                    $where = [];
+                    $where = ['status NOT IN (:stat_ex)'];
+                    $params_add = [':stat_ex' => '--'];
 
                     if ($filter_start !== '') {
-                        $where[] = "created_date >= '{$filter_start} 00:00:00'";
+                        $where[] = 'created_date >= :filter_start';
+                        $params_add[':filter_start'] = "{$filter_start} 00:00:00";
                     }
 
                     if ($filter_end !== '') {
-                        $where[] = "created_date <= '{$filter_end} 23:59:59'";
+                        $where[] = 'created_date <= :filter_end';
+                        $params_add[':filter_end'] = "{$filter_end} 23:59:59";
                     }
 
                     if ($filter_status !== '') {
-                        $where[] = "status = '{$filter_status}'";
+                        $where[] = 'status = :filter_status';
+                        $params_add[':filter_status'] = $filter_status;
                     }
 
-                    $where_sql = $where ? implode(' AND ', $where) . ' AND ' : '';
+                    if ($search_input !== '') {
+                        $where[] = '(name LIKE :search)';
+                        $params_add[':search'] = '%' . $search_input . '%';
+                    }
+
+                    $where_sql = 'WHERE ' . implode(' AND ', $where);
                     /* Filters */
 
                     $page = max(1, intval($_POST['page'] ?? 1));
-                    $show_limit = ($_POST['show_limit'] == '') ? 999999 : intval($_POST['show_limit']);
-                    $offset = ($page - 1) * $show_limit;
+                    $show_limit = ($show_limit_raw === '' || $show_limit_raw === 'all') ? 999999 : max(1, min(1000, intval($show_limit_raw)));
+                    $offset = max(0, ($page - 1) * $show_limit);
 
-                    $sql_query = '';
+                    $sql_limit = ($show_limit_raw === 'all') ? '' : " LIMIT " . intval($offset) . ", " . intval($show_limit);
 
-                    if ($search_input !== '') {
-                        $sql_query .= " AND ( name LIKE '%$search_input%')";
-                    }
-
-                    $sql_limit = '';
-                    if($show_limit == 'all'){
-
-                    }else{
-                       $sql_limit = " LIMIT $offset, $show_limit";
-                    }
-
-                    $response_result = json_decode(getData($db_prefix.'addon',' WHERE '.$where_sql.' status NOT IN ("--") '.$sql_query.' ORDER BY 1 DESC '.$sql_limit),true);
+                    $response_result = json_decode(getData($db_prefix.'addon', $where_sql . ' ORDER BY 1 DESC ' . $sql_limit, '* FROM', $params_add), true);
                     if($response_result['status'] == true){
                         $response = [];
 
@@ -8122,10 +8207,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             ];
                         }
 
-                        $count_data = json_decode(getData($db_prefix.'addon',' WHERE '.$where_sql.' status NOT IN ("--") '.$sql_query),true);
+                        $count_data = json_decode(getData($db_prefix.'addon', $where_sql, '* FROM', $params_add), true);
 
                         $total_records = count($count_data['response'] ?? []);
-                        $total_pages = ceil($total_records / $show_limit);
+                        $total_pages = ($show_limit > 0) ? (int)ceil($total_records / $show_limit) : 1;
 
                         $pagination = '<ul class="pagination m-0 ms-auto">';
 
@@ -8185,7 +8270,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                     $ItemID = escape_string($_POST['ItemID'] ?? '');
 
-                    $response_brand = json_decode(getData($db_prefix.'addon','WHERE addon_id = "'.$ItemID.'" '),true);
+                    $params_add = [':addon_id' => $ItemID];
+                    $response_brand = json_decode(getData($db_prefix.'addon','WHERE addon_id = :addon_id', '* FROM', $params_add),true);
                     if($response_brand['status'] == true){
                         $condition = "addon_id = '".$ItemID."'"; 
                         
@@ -8217,7 +8303,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         foreach ($selected_ids as $id) {
                             $itemID = escape_string($id);
 
-                            $response_brand = json_decode(getData($db_prefix.'addon','WHERE addon_id = "'.$itemID.'"'),true);
+                            $params_add = [':addon_id' => $itemID];
+                    $response_brand = json_decode(getData($db_prefix.'addon','WHERE addon_id = :addon_id', '* FROM', $params_add),true);
                             if($response_brand['status'] == true){
                                 if($actionID == "deleted"){
                                     if (hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'addons', 'delete', $global_user_response['response'][0]['role'])) {
@@ -8285,7 +8372,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     if($addon_id == "" || $status == ""){
                         echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Please fill in all required fields before proceeding.', 'csrf_token' => $new_csrf_token]);
                     }else{
-                        $response = json_decode(getData($db_prefix.'addon','WHERE addon_id ="'.$addon_id.'"'),true);
+                        $params_add = [':addon_id' => $addon_id];
+                    $response = json_decode(getData($db_prefix.'addon','WHERE addon_id = :addon_id', '* FROM', $params_add),true);
                         if($response['status'] == true){
                             $columns = ['status', 'updated_date'];
                             $values = [$status, getCurrentDatetime('Y-m-d H:i:s')];
@@ -8320,7 +8408,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     if($addon_id == ""){
                         echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Please fill in all required fields before proceeding.', 'csrf_token' => $new_csrf_token]);
                     }else{
-                        $response = json_decode(getData($db_prefix.'addon','WHERE addon_id ="'.$addon_id.'"'),true);
+                        $params_add = [':addon_id' => $addon_id];
+                    $response = json_decode(getData($db_prefix.'addon','WHERE addon_id = :addon_id', '* FROM', $params_add),true);
                         if($response['status'] == true){
                             $configData = [];
 
@@ -8345,7 +8434,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             }
 
                             foreach ($configData as $optionName => $optionValue) {
-                                $response_optionValue = json_decode(getData($db_prefix.'addon_parameter','WHERE addon_id = "'.$addon_id.'" AND option_name = "'.$optionName.'"'),true);
+                                $params_addp = [':addon_id' => $addon_id, ':option_name' => $optionName];
+                    $response_optionValue = json_decode(getData($db_prefix.'addon_parameter','WHERE addon_id = :addon_id AND option_name = :option_name', '* FROM', $params_addp),true);
 
                                 if(isset($response_optionValue['response'][0]['value'])){
                                     $columns = ['value', 'updated_date'];
@@ -8590,14 +8680,20 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             }
                         }
 
-                        $customerInfo = json_decode($invoiceRow['customer_info'], true);
+                        $customerInfo = json_decode($invoiceRow['customer_info'], true) ?? [];
 
-                        $customer_name = $customerInfo['name'] ?? '';
-                        $customer_email = $customerInfo['email'] ?? '';
+                        $customer_name   = $customerInfo['name'] ?? '';
+                        $customer_email  = $customerInfo['email'] ?? '';
                         $customer_mobile = $customerInfo['mobile'] ?? '';
 
-                        $source_info = '[{ "label": "Invoice Id", "value": "'.$itemid.'" }]';
-                        $metadata = '{"invoice_id": "'.$itemid.'"}';
+                        $customer_info = json_encode([
+                            'name'   => $customer_name,
+                            'email'  => $customer_email,
+                            'mobile' => $customer_mobile
+                        ], JSON_UNESCAPED_UNICODE);
+
+                        $source_info = json_encode([['label' => 'Invoice Id', 'value' => $itemid]], JSON_UNESCAPED_UNICODE);
+                        $metadata    = json_encode(['invoice_id' => $itemid], JSON_UNESCAPED_UNICODE);
 
                         $amount = money_add( money_add( money_sub($subTotal, $totalDiscount), $totalVat ), money_sanitize($invoiceRow['shipping']) );
 
@@ -8609,11 +8705,15 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         $payment_id = generateItemID(27, 27);
 
                         $columns = ['brand_id', 'source', 'ref', 'customer_info', 'amount', 'currency', 'source_info', 'metadata', 'return_url', 'webhook_url', 'created_date', 'updated_date'];
-                        $values = [$invoiceRow['brand_id'], 'invoice', $payment_id, '{ "name": "'.$customer_name.'", "email": "'.$customer_email.'", "mobile": "'.$customer_mobile.'" }', money_sanitize($amount), $currency, $source_info, $metadata, $return_url, $webhook_url, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
+                        $values = [$invoiceRow['brand_id'], 'invoice', $payment_id, $customer_info, money_sanitize($amount), $currency, $source_info, $metadata, $return_url, $webhook_url, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
 
-                        insertData($db_prefix.'transaction', $columns, $values);
+                        $insertedPaymentId = insertTransactionRecord($columns, $values, 2);
 
-                        echo json_encode(['status' => "true", 'redirect' => $site_url.$path_payment.'/'.$payment_id]);
+                        if ($insertedPaymentId !== false) {
+                            echo json_encode(['status' => "true", 'redirect' => $site_url.$path_payment.'/'.$insertedPaymentId]);
+                        } else {
+                            echo json_encode(['status' => "false", 'title' => 'Transaction Error', 'message' => 'Failed to create transaction record. Please try again.']);
+                        }
                     }else{
                         echo json_encode(['status' => "false", 'title' => 'Invalid Invoice ID', 'message' => 'Please fill in all required fields before proceeding.']);
                     }
@@ -8632,17 +8732,6 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     if($response_payment_link['status'] == true){
                         $paymentRow = $response_payment_link['response'][0];
 
-                        if($paymentRow['quantity'] > 0){
-                            $columns = ['quantity'];
-                            $values = [$paymentRow['quantity']-1];
-                            $condition = "ref = '".$paymentRow['ref']."'"; 
-                            
-                            updateData($db_prefix.'payment_link', $columns, $values, $condition);
-                        }else{
-                            echo json_encode(['status' => "false", 'title' => 'Product Not Available', 'message' => 'Cannot generate payment link because the product is out of stock.']);
-                            exit();
-                        }
-
                         if($paymentRow['expired_date'] == "--"){
                             $status = $paymentRow['status'];
                         }else{
@@ -8658,87 +8747,115 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             exit();
                         }
 
-                        $form_data = [];
+                        $pdo = connectDatabase();
+                        $pdo->beginTransaction();
 
-                        $customFields = [];
+                        try {
+                            $stmt = $pdo->prepare("UPDATE `{$db_prefix}payment_link` SET `quantity` = `quantity` - 1 WHERE `ref` = :ref AND `quantity` > 0 AND `status` = 'active'");
+                            $stmt->execute([':ref' => $paymentRow['ref']]);
 
-                        $params = [ ':paymentLinkID' => $paymentRow['ref'] ];
-
-                        $response_PaymentLinkItem = json_decode(getData($db_prefix.'payment_link_field','WHERE paymentLinkID = :paymentLinkID', '* FROM', $params),true);
-                        if($response_PaymentLinkItem['status'] == true){
-                            foreach($response_PaymentLinkItem['response'] as $row){
-                                $Inputoptions = [];
-                                if ($row['formType'] === 'select' && $row['value'] !== '--' || $row['formType'] === 'file' && $row['value'] !== '--') {
-                                    $Inputoptions = array_map('trim', explode(',', $row['value']));
-                                }
-
-                                $customFields[] = [
-                                    'type'        => $row['formType'],  
-                                    'name'        => strtolower(preg_replace('/[^a-z0-9_]/i', '_', $row['fieldName'])),                             
-                                    'label'       => $row['fieldName'],         
-                                    'options'     => $Inputoptions,      
-                                    'required'    => $row['required'],                     
-                                ];
+                            if ($stmt->rowCount() !== 1) {
+                                $pdo->rollBack();
+                                echo json_encode(['status' => "false", 'title' => 'Product Not Available', 'message' => 'Cannot generate payment link because the product is out of stock.']);
+                                exit();
                             }
-                        }
 
-                        foreach ($customFields as $field) {
-                            $name  = $field['name'];
-                            $label = $field['label'];
-                            $type  = $field['type'];
+                            $form_data = [];
+                            $customFields = [];
 
-                            if ($type === 'file' && isset($_FILES[$name]) && $_FILES[$name]['error'] === 0) {
-                                $max_file_size = 5 * 1024 * 1024; 
-                                
-                                $mediaUpload = json_decode(uploadImage($_FILES[$name]?? null, $max_file_size), true);
-                                if($mediaUpload['status'] == true){
-                                    $url = $site_url.'pp-media/storage/'.$mediaUpload['file'];
-                                    
-                                    $form_data[] = [
-                                        'label' => $label,
-                                        'value' => $url
+                            $params_plf = [ ':paymentLinkID' => $paymentRow['ref'] ];
+                            $response_PaymentLinkItem = json_decode(getData($db_prefix.'payment_link_field','WHERE paymentLinkID = :paymentLinkID', '* FROM', $params_plf),true);
+                            if($response_PaymentLinkItem['status'] == true){
+                                foreach($response_PaymentLinkItem['response'] as $row){
+                                    $Inputoptions = [];
+                                    if ($row['formType'] === 'select' && $row['value'] !== '--' || $row['formType'] === 'file' && $row['value'] !== '--') {
+                                        $Inputoptions = array_map('trim', explode(',', $row['value']));
+                                    }
+
+                                    $customFields[] = [
+                                        'type'        => $row['formType'],  
+                                        'name'        => strtolower(preg_replace('/[^a-z0-9_]/i', '_', $row['fieldName'])),                             
+                                        'label'       => $row['fieldName'],         
+                                        'options'     => $Inputoptions,      
+                                        'required'    => $row['required'],                     
                                     ];
                                 }
-                            }elseif ($type === 'checkbox') {
-
-                                $value = isset($_POST[$name])
-                                    ? implode(', ', $_POST[$name])
-                                    : '';
-
-                                $form_data[] = [
-                                    'label' => $label,
-                                    'value' => $value
-                                ];
-                            }elseif (isset($_POST[$name])) {
-
-                                $value = is_array($_POST[$name])
-                                    ? implode(', ', $_POST[$name])
-                                    : trim($_POST[$name]);
-
-                                $form_data[] = [
-                                    'label' => $label,
-                                    'value' => $value
-                                ];
                             }
+
+                            foreach ($customFields as $field) {
+                                $name  = $field['name'];
+                                $label = $field['label'];
+                                $type  = $field['type'];
+
+                                if ($type === 'file' && isset($_FILES[$name]) && $_FILES[$name]['error'] === 0) {
+                                    $max_file_size = 5 * 1024 * 1024; 
+                                    
+                                    $mediaUpload = json_decode(uploadImage($_FILES[$name]?? null, $max_file_size), true);
+                                    if($mediaUpload['status'] == true){
+                                        $url = $site_url.'pp-media/storage/'.$mediaUpload['file'];
+                                        
+                                        $form_data[] = [
+                                            'label' => $label,
+                                            'value' => $url
+                                        ];
+                                    }
+                                }elseif ($type === 'checkbox') {
+                                    $value = isset($_POST[$name])
+                                        ? implode(', ', $_POST[$name])
+                                        : '';
+
+                                    $form_data[] = [
+                                        'label' => $label,
+                                        'value' => $value
+                                    ];
+                                }elseif (isset($_POST[$name])) {
+                                    $value = is_array($_POST[$name])
+                                        ? implode(', ', $_POST[$name])
+                                        : trim($_POST[$name]);
+
+                                    $form_data[] = [
+                                        'label' => $label,
+                                        'value' => $value
+                                    ];
+                                }
+                            }
+
+                            $customer_name   = trim($_POST['full-name'] ?? '');
+                            $customer_email  = trim($_POST['email-address'] ?? '');
+                            $customer_mobile = trim($_POST['mobile-number'] ?? '');
+
+                            $customer_info = json_encode([
+                                'name'   => $customer_name,
+                                'email'  => $customer_email,
+                                'mobile' => $customer_mobile
+                            ], JSON_UNESCAPED_UNICODE);
+
+                            $source_info = json_encode($form_data, JSON_UNESCAPED_UNICODE);
+                            $metadata = json_encode(['paymentLink_id' => $itemid], JSON_UNESCAPED_UNICODE);
+
+                            $currency = $paymentRow['currency'];
+                            $payment_id = generateItemID(27, 27);
+
+                            $columns = ['brand_id', 'source', 'ref', 'customer_info', 'amount', 'currency', 'source_info', 'metadata', 'created_date', 'updated_date'];
+                            $values = [$paymentRow['brand_id'], 'payment-link', $payment_id, $customer_info, money_sanitize($paymentRow['amount']), $currency, $source_info, $metadata, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
+
+                            $insertedPaymentId = insertTransactionRecord($columns, $values, 2, 5, $pdo);
+
+                            if ($insertedPaymentId === false) {
+                                $pdo->rollBack();
+                                echo json_encode(['status' => "false", 'title' => 'Transaction Failed', 'message' => 'Failed to create transaction record. Please try again.']);
+                                exit();
+                            }
+
+                            $pdo->commit();
+                            echo json_encode(['status' => "true", 'redirect' => $site_url.$path_payment.'/'.$insertedPaymentId]);
+                        } catch (Throwable $e) {
+                            if ($pdo->inTransaction()) {
+                                $pdo->rollBack();
+                            }
+                            echo json_encode(['status' => "false", 'title' => 'Transaction Failed', 'message' => 'An error occurred while processing your request.']);
+                            exit();
                         }
-
-                        $customer_name  = trim($_POST['full-name'] ?? '');
-                        $customer_email          = trim($_POST['email-address'] ?? '');
-                        $customer_mobile  = trim($_POST['mobile-number'] ?? '');
-
-                        $source_info = json_encode($form_data);
-                        $metadata = '{"paymentLink_id": "'.$itemid.'"}';
-
-                        $currency = $paymentRow['currency'];
-
-                        $payment_id = generateItemID(27, 27);
-
-                        $columns = ['brand_id', 'source', 'ref', 'customer_info', 'amount', 'currency', 'source_info', 'metadata', 'created_date', 'updated_date'];
-                        $values = [$paymentRow['brand_id'], 'payment-link', $payment_id, '{ "name": "'.$customer_name.'", "email": "'.$customer_email.'", "mobile": "'.$customer_mobile.'" }', money_sanitize($paymentRow['amount']), $currency, $source_info, $metadata, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
-
-                        insertData($db_prefix.'transaction', $columns, $values);
-
-                        echo json_encode(['status' => "true", 'redirect' => $site_url.$path_payment.'/'.$payment_id]);
                     }else{
                         echo json_encode(['status' => "false", 'title' => 'Invalid Payment Link ID', 'message' => 'Please fill in all required fields before proceeding.']);
                     }
@@ -8757,23 +8874,44 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     if($response_brand['status'] == true){
                         $brandRow = $response_brand['response'][0];
 
-                        $customer_name  = trim($_POST['full-name'] ?? '');
-                        $customer_email          = trim($_POST['email-address'] ?? '');
-                        $customer_mobile  = trim($_POST['mobile-number'] ?? '');
+                        $raw_amount = trim($_POST['amount'] ?? '');
+                        if ($raw_amount === '' || !is_numeric($raw_amount) || !is_finite((float)$raw_amount)) {
+                            echo json_encode(['status' => "false", 'title' => 'Invalid Amount', 'message' => 'Please enter a valid numeric amount.']);
+                            exit();
+                        }
 
-                        $metadata = '{"paymentLink_id": "'.$itemid.'"}';
+                        $sanitized_amount = money_sanitize($raw_amount);
+                        if (bccomp($sanitized_amount, '0', 8) <= 0) {
+                            echo json_encode(['status' => "false", 'title' => 'Invalid Amount', 'message' => 'Amount must be greater than zero.']);
+                            exit();
+                        }
 
-                        $amount = trim($_POST['amount'] ?? '');
+                        $customer_name   = trim($_POST['full-name'] ?? '');
+                        $customer_email  = trim($_POST['email-address'] ?? '');
+                        $customer_mobile = trim($_POST['mobile-number'] ?? '');
+
+                        $customer_info = json_encode([
+                            'name'   => $customer_name,
+                            'email'  => $customer_email,
+                            'mobile' => $customer_mobile
+                        ], JSON_UNESCAPED_UNICODE);
+
+                        $metadata = json_encode(['paymentLink_id' => $itemid], JSON_UNESCAPED_UNICODE);
+
                         $currency = (($v = get_env('payment-link-default-currency', $response_brand['response'][0]['brand_id'])) && $v !== '--') ? $v : $brandRow['currency_code'];
 
                         $payment_id = generateItemID(27, 27);
 
-                        $columns = ['brand_id', 'source', 'ref', 'customer_info', 'amount', 'currency', 'created_date', 'updated_date'];
-                        $values = [$brandRow['brand_id'], 'payment-link-default', $payment_id, '{ "name": "'.$customer_name.'", "email": "'.$customer_email.'", "mobile": "'.$customer_mobile.'" }', money_sanitize($amount), $currency, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
+                        $columns = ['brand_id', 'source', 'ref', 'customer_info', 'amount', 'currency', 'metadata', 'created_date', 'updated_date'];
+                        $values = [$brandRow['brand_id'], 'payment-link-default', $payment_id, $customer_info, $sanitized_amount, $currency, $metadata, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
 
-                        insertData($db_prefix.'transaction', $columns, $values);
+                        $insertedPaymentId = insertTransactionRecord($columns, $values, 2);
 
-                        echo json_encode(['status' => "true", 'redirect' => $site_url.$path_payment.'/'.$payment_id]);
+                        if ($insertedPaymentId !== false) {
+                            echo json_encode(['status' => "true", 'redirect' => $site_url.$path_payment.'/'.$insertedPaymentId]);
+                        } else {
+                            echo json_encode(['status' => "false", 'title' => 'Transaction Error', 'message' => 'Failed to create transaction record. Please try again.']);
+                        }
                     }else{
                         echo json_encode(['status' => "false", 'title' => 'Invalid Payment Link ID', 'message' => 'Please fill in all required fields before proceeding.']);
                     }
@@ -8815,7 +8953,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                                     $currencyRates = [];
 
-                                    $currencyRes = json_decode(getData($db_prefix.'currency', ' WHERE brand_id = "'.$response_gateway['response'][0]['brand_id'].'"'),true);
+                                    $params_cur = [':brand_id' => $response_gateway['response'][0]['brand_id']];
+                            $currencyRes = json_decode(getData($db_prefix.'currency', 'WHERE brand_id = :brand_id', '* FROM', $params_cur),true);
 
                                     if (!empty($currencyRes['response'])) {
                                         foreach ($currencyRes['response'] as $c) {
@@ -8903,21 +9042,55 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                                     $response_pending_SMSTransaction = json_decode(getData($db_prefix.'sms_data','WHERE sender_key = :sender_key AND type = :type AND trx_id = :trx_id AND status = :status', '* FROM', $params), true);
                                                     if($response_pending_SMSTransaction['status'] == true){
 
-                                                        $response_brand = json_decode(getData($db_prefix.'brands',' WHERE brand_id ="'.$response_transaction['response'][0]['brand_id'].'"'),true);
+                                                        $params_b = [':brand_id' => $response_transaction['response'][0]['brand_id']];
+                            $response_brand = json_decode(getData($db_prefix.'brands','WHERE brand_id = :brand_id', '* FROM', $params_b),true);
                                                         if($response_brand['status'] == true){
 
                                                             if (verifyPaymentTolerance($convertedAmount, $response_pending_SMSTransaction['response'][0]['amount'], $response_brand['response'][0]['payment_tolerance'])) {
-                                                                $columns = ['status', 'updated_date'];
-                                                                $values = ['used', getCurrentDatetime('Y-m-d H:i:s')];
-                                                                $condition = 'id ="'.$response_pending_SMSTransaction['response'][0]['id'].'"'; 
-                                                                
-                                                                updateData($db_prefix.'sms_data', $columns, $values, $condition);
+                                                                 $pdo_v = connectDatabase();
+                                                                 $pdo_v->beginTransaction();
 
-                                                                $columns = ['processing_fee', 'discount_amount', 'local_net_amount', 'local_currency', 'gateway_id', 'sender_key',  'status', 'sender', 'trx_id', 'updated_date'];
-                                                                $values = [money_sanitize($totalProcessingFee), money_sanitize($totalDiscount), money_sanitize($convertedAmount), $response_gateway['response'][0]['currency'], $gateway_id, $gateway_info['sender_key'], 'completed', $response_pending_SMSTransaction['response'][0]['number'], $trxid, getCurrentDatetime('Y-m-d H:i:s')];
-                                                                $condition = 'id ="'.$response_transaction['response'][0]['id'].'"'; 
+                                                                 try {
+                                                                     $stmt_sms = $pdo_v->prepare("UPDATE `{$db_prefix}sms_data` SET `status` = 'used', `updated_date` = :updated WHERE `id` = :id AND `status` = 'approved'");
+                                                                     $stmt_sms->execute([
+                                                                         ':updated' => getCurrentDatetime('Y-m-d H:i:s'),
+                                                                         ':id'      => $response_pending_SMSTransaction['response'][0]['id']
+                                                                     ]);
 
-                                                                updateData($db_prefix.'transaction', $columns, $values, $condition);
+                                                                     if ($stmt_sms->rowCount() !== 1) {
+                                                                         $pdo_v->rollBack();
+                                                                         echo json_encode(['status' => "false", 'title' => 'Verification Failed', 'message' => 'This SMS payment has already been claimed or processed.']);
+                                                                         exit();
+                                                                     }
+
+                                                                     $stmt_tx = $pdo_v->prepare("UPDATE `{$db_prefix}transaction` SET `processing_fee` = :fee, `discount_amount` = :disc, `local_net_amount` = :local_net, `local_currency` = :local_curr, `gateway_id` = :gw_id, `sender_key` = :sender_key, `status` = 'completed', `sender` = :sender, `trx_id` = :trx_id, `updated_date` = :updated WHERE `id` = :tx_id AND `status` = 'initiated'");
+                                                                     $stmt_tx->execute([
+                                                                         ':fee'        => money_sanitize($totalProcessingFee),
+                                                                         ':disc'       => money_sanitize($totalDiscount),
+                                                                         ':local_net'  => money_sanitize($convertedAmount),
+                                                                         ':local_curr' => $response_gateway['response'][0]['currency'],
+                                                                         ':gw_id'      => $gateway_id,
+                                                                         ':sender_key' => $gateway_info['sender_key'],
+                                                                         ':sender'     => $response_pending_SMSTransaction['response'][0]['number'],
+                                                                         ':trx_id'     => $trxid,
+                                                                         ':updated'    => getCurrentDatetime('Y-m-d H:i:s'),
+                                                                         ':tx_id'      => $response_transaction['response'][0]['id']
+                                                                     ]);
+
+                                                                     if ($stmt_tx->rowCount() !== 1) {
+                                                                         $pdo_v->rollBack();
+                                                                         echo json_encode(['status' => "false", 'title' => 'Verification Failed', 'message' => 'Failed to update transaction status. Please try again.']);
+                                                                         exit();
+                                                                     }
+
+                                                                     $pdo_v->commit();
+                                                                 } catch (Throwable $e) {
+                                                                     if ($pdo_v->inTransaction()) {
+                                                                         $pdo_v->rollBack();
+                                                                     }
+                                                                     echo json_encode(['status' => "false", 'title' => 'Verification Failed', 'message' => 'An error occurred during verification.']);
+                                                                     exit();
+                                                                 }
 
                                                                 $params = [ ':ref' => $transaction_id, ':status' => 'completed' ];
 
@@ -8925,7 +9098,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                                                                 $metadata = json_decode($response_transaction['response'][0]['metadata'], true) ?: [];
 
-                                                                $response_gateway = json_decode(getData($db_prefix.'gateways',' WHERE brand_id ="'.$response_brand['response'][0]['brand_id'].'" AND gateway_id = "'.$gateway_id.'"'),true);
+                                                                $params_gw = [':brand_id' => $response_brand['response'][0]['brand_id'], ':gateway_id' => $gateway_id];
+                            $response_gateway = json_decode(getData($db_prefix.'gateways','WHERE brand_id = :brand_id AND gateway_id = :gateway_id', '* FROM', $params_gw),true);
 
                                                                 $gateway = $response_gateway['response'][0]['name'] ?? '';
 
@@ -9038,7 +9212,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                                     if($response_Checktransaction['status'] == true){
                                                         echo json_encode(['status' => "false", 'title' => 'Duplicate Transaction ID', 'message' => 'This Transaction ID is already exits. Please provide a different one.']);
                                                     }else{
-                                                        $response_brand = json_decode(getData($db_prefix.'brands',' WHERE brand_id ="'.$response_transaction['response'][0]['brand_id'].'"'),true);
+                                                        $params_b = [':brand_id' => $response_transaction['response'][0]['brand_id']];
+                            $response_brand = json_decode(getData($db_prefix.'brands','WHERE brand_id = :brand_id', '* FROM', $params_b),true);
                                                         if($response_brand['status'] == true){
                                                             $columns = ['processing_fee', 'discount_amount', 'local_net_amount', 'local_currency', 'gateway_id', 'status', 'trx_id', 'updated_date'];
                                                             $values = [money_sanitize($totalProcessingFee), money_sanitize($totalDiscount), money_sanitize($convertedAmount), $response_gateway['response'][0]['currency'], $gateway_id, 'pending', $trxid, getCurrentDatetime('Y-m-d H:i:s')];
@@ -9052,7 +9227,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                                                             $metadata = json_decode($response_transaction['response'][0]['metadata'], true) ?: [];
 
-                                                            $response_gateway = json_decode(getData($db_prefix.'gateways',' WHERE brand_id ="'.$response_brand['response'][0]['brand_id'].'" AND gateway_id = "'.$gateway_id.'"'),true);
+                                                            $params_gw = [':brand_id' => $response_brand['response'][0]['brand_id'], ':gateway_id' => $gateway_id];
+                            $response_gateway = json_decode(getData($db_prefix.'gateways','WHERE brand_id = :brand_id AND gateway_id = :gateway_id', '* FROM', $params_gw),true);
 
                                                             $gateway = $response_gateway['response'][0]['name'] ?? '';
 
@@ -9089,7 +9265,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                                     if($slip == ""){
                                                         echo json_encode(['status' => "false", 'title' => 'Missing Transaction Slip', 'message' => 'The Transaction slip field cannot be empty. Please provide a valid Transaction Slip.']);
                                                     }else{
-                                                        $response_brand = json_decode(getData($db_prefix.'brands',' WHERE brand_id ="'.$response_transaction['response'][0]['brand_id'].'"'),true);
+                                                        $params_b = [':brand_id' => $response_transaction['response'][0]['brand_id']];
+                            $response_brand = json_decode(getData($db_prefix.'brands','WHERE brand_id = :brand_id', '* FROM', $params_b),true);
                                                         if($response_brand['status'] == true){
                                                             $max_file_size = 5 * 1024 * 1024; 
                                                             
@@ -9113,7 +9290,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                                                             $metadata = json_decode($response_transaction['response'][0]['metadata'], true) ?: [];
 
-                                                            $response_gateway = json_decode(getData($db_prefix.'gateways',' WHERE brand_id ="'.$response_brand['response'][0]['brand_id'].'" AND gateway_id = "'.$gateway_id.'"'),true);
+                                                            $params_gw = [':brand_id' => $response_brand['response'][0]['brand_id'], ':gateway_id' => $gateway_id];
+                            $response_gateway = json_decode(getData($db_prefix.'gateways','WHERE brand_id = :brand_id AND gateway_id = :gateway_id', '* FROM', $params_gw),true);
 
                                                             $gateway = $response_gateway['response'][0]['name'] ?? '';
 
@@ -9285,7 +9463,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                 if($responseAdmin['status'] == true){
 
 
-                                    $response_result = json_decode(getData($db_prefix.'sms_data',' WHERE source = "app" AND device_id = "'.$response['response'][0]['device_id'].'" AND status NOT IN ("awaiting-review") ORDER BY 1 DESC'),true);
+                                    $params_sd = [':source' => 'app', ':device_id' => $response['response'][0]['device_id'], ':status_ex' => 'awaiting-review'];
+                    $response_result = json_decode(getData($db_prefix.'sms_data','WHERE source = :source AND device_id = :device_id AND status NOT IN (:status_ex) ORDER BY 1 DESC', '* FROM', $params_sd),true);
 
                                     if ($response_result['status'] == true) {
 
@@ -9699,7 +9878,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
             }
 
             $initPendingTrscount = 0;
-            $response_dashboard_info = json_decode(getData($db_prefix.'transaction',' WHERE brand_id = "'.$global_response_brand['response'][0]['brand_id'].'" AND status = "pending"'),true);
+            $params_trx = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':status' => 'pending'];
+                    $response_dashboard_info = json_decode(getData($db_prefix.'transaction','WHERE brand_id = :brand_id AND status = :status', '* FROM', $params_trx),true);
             if($response_dashboard_info['status'] == true){
                 foreach($response_dashboard_info['response'] as $row){
                     $initPendingTrscount++;

@@ -73,16 +73,24 @@
 
             $base_url = (($data['options']['mode'] ?? 'sandbox') === 'live') ? 'https://api.paystation.com.bd' : 'https://sandbox.paystation.com.bd';
 
+            $ref = $data['transaction']['ref'] ?? '';
+            $brand_id = $data['transaction']['brand_id'] ?? ($data['brand']['brand_id'] ?? 'both');
+
+            $invoiceNumber = (string) random_int(100000000, 999999999);
+            if (!empty($ref)) {
+                set_env('paystation-invoice-' . $ref, $invoiceNumber, $brand_id);
+            }
+
             $curl = curl_init();
             
             $postFields = array(
-                'invoice_number' => rand(),
+                'invoice_number' => $invoiceNumber,
                 'currency' => 'BDT',
                 'payment_amount' => $data['transaction']['local_net_amount'],
-                'reference' => rand(),
-                'cust_name' => $data['transaction']['customer']['name'],
-                'cust_phone' => $data['transaction']['customer']['mobile'],
-                'cust_email' => $data['transaction']['customer']['email'],
+                'reference' => $ref,
+                'cust_name' => $data['transaction']['customer']['name'] ?? '',
+                'cust_phone' => $data['transaction']['customer']['mobile'] ?? '',
+                'cust_email' => $data['transaction']['customer']['email'] ?? '',
                 'cust_address' => "Bangladesh",
                 'pay_with_charge' => ($data['options']['pay_with_charge'] ?? '0'),
                 'callback_url' => pp_callback_url(),
@@ -98,8 +106,10 @@
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_ENCODING => '',
                 CURLOPT_MAXREDIRS => 10,
-                CURLOPT_TIMEOUT => 0,
-                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_TIMEOUT => 30,
+                CURLOPT_FOLLOWLOCATION => false,
+                CURLOPT_SSL_VERIFYPEER => true,
+                CURLOPT_SSL_VERIFYHOST => 2,
                 CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
                 CURLOPT_CUSTOMREQUEST => 'POST',
                 CURLOPT_POSTFIELDS => $postFields,
@@ -113,7 +123,7 @@
             if(isset($response_curl['payment_url'])){
                echo '<script>location.href="' . $response_curl['payment_url'] . '";</script>';
             }else{
-                echo '<div class="alert alert-danger" role="alert">'.$response.'</div> <style>.loading-123412341234{display: none;}</style>';
+                echo '<div class="alert alert-danger" role="alert">'.htmlspecialchars((string)$response, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'</div> <style>.loading-123412341234{display: none;}</style>';
             }
         }
 
@@ -122,35 +132,83 @@
 
             $base_url = (($data['options']['mode'] ?? 'sandbox') === 'live') ? 'https://api.paystation.com.bd' : 'https://sandbox.paystation.com.bd';
 
-            $status = $_GET['status'] ?? '';
+            $ref = $data['transaction']['ref'] ?? '';
+            $brand_id = $data['transaction']['brand_id'] ?? ($data['brand']['brand_id'] ?? 'both');
+
+            $txStatus = $data['transaction']['status'] ?? '';
+            if ($txStatus === 'completed') {
+                echo "<script>location.reload();</script>";
+                return;
+            }
+            if ($txStatus !== 'initiated') {
+                echo '<div class="alert alert-danger" role="alert">Transaction cannot be processed in current state.</div><style>.loading-123412341234{display: none;}</style>';
+                return;
+            }
+
+            $status = $_GET['status'] ?? ($_POST['status'] ?? '');
 
             if($status == "Canceled"){
                 echo '<div class="alert alert-danger" role="alert">Transaction Canceled.</div><style>.loading-123412341234{display: none;}</style>';
             }else{
-                $invoice_number = $_GET['invoice_number'] ?? '';
-                $trx_id = $_GET['trx_id'] ?? '';
+                $expectedInvoice = get_env('paystation-invoice-' . $ref, $brand_id);
+                $callbackInvoice = (string)($_GET['invoice_number'] ?? ($_POST['invoice_number'] ?? ''));
 
-                $header=array('merchantId:'.$data['options']['merchant_id']);
-                $body=array('invoice_number' => $invoice_number);
+                if (empty($expectedInvoice) || empty($callbackInvoice) || !hash_equals((string)$expectedInvoice, $callbackInvoice)) {
+                    echo '<div class="alert alert-danger" role="alert">Invalid or mismatched invoice number.</div><style>.loading-123412341234{display: none;}</style>';
+                    return;
+                }
+
+                $header = array('merchantId:' . ($data['options']['merchant_id'] ?? ''));
+                $body = array('invoice_number' => $expectedInvoice);
 
                 $url = curl_init($base_url.'/transaction-status');
-                curl_setopt($url,CURLOPT_HTTPHEADER, $header);
-                curl_setopt($url,CURLOPT_CUSTOMREQUEST, "POST");
-                curl_setopt($url,CURLOPT_RETURNTRANSFER, true);
-                curl_setopt($url,CURLOPT_SSL_VERIFYPEER, false);
-                curl_setopt($url,CURLOPT_POSTFIELDS, $body);
-                curl_setopt($url,CURLOPT_FOLLOWLOCATION, 1);
-                $responseData=curl_exec($url);
+                curl_setopt($url, CURLOPT_HTTPHEADER, $header);
+                curl_setopt($url, CURLOPT_CUSTOMREQUEST, "POST");
+                curl_setopt($url, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($url, CURLOPT_SSL_VERIFYPEER, true);
+                curl_setopt($url, CURLOPT_SSL_VERIFYHOST, 2);
+                curl_setopt($url, CURLOPT_POSTFIELDS, $body);
+                curl_setopt($url, CURLOPT_FOLLOWLOCATION, false);
+                curl_setopt($url, CURLOPT_TIMEOUT, 30);
+                $responseData = curl_exec($url);
                 curl_close($url);
                 
                 $decode_response = json_decode($responseData, true);
                 
-                if($decode_response['status_code'] == "200" && $decode_response['status'] == "success"){
-                    if($decode_response['data']['trx_status'] == "successful" || $decode_response['data']['trx_status'] == "Success"){
-                        $verified_order_id = $decode_response['data']['invoice_number'];
-                        $verified_trx_id = $decode_response['data']['trx_id'];
-                        $payer_mobile_no = $decode_response['data']['payer_mobile_no'];
-                        $payment_method = $decode_response['data']['payment_method'];
+                if(isset($decode_response['status_code'], $decode_response['status']) && $decode_response['status_code'] == "200" && $decode_response['status'] == "success"){
+                    $verified_order_id = (string)($decode_response['data']['invoice_number'] ?? '');
+
+                    if (empty($verified_order_id) || !hash_equals((string)$expectedInvoice, $verified_order_id)) {
+                        echo '<div class="alert alert-danger" role="alert">PayStation verified invoice mismatch.</div><style>.loading-123412341234{display: none;}</style>';
+                        return;
+                    }
+
+                    $trx_status = $decode_response['data']['trx_status'] ?? '';
+                    if($trx_status == "successful" || $trx_status == "Success"){
+                        $respAmount = $decode_response['data']['payment_amount'] ?? ($decode_response['data']['amount'] ?? null);
+                        if ($respAmount !== null && isset($data['transaction']['local_net_amount'])) {
+                            if (money_sanitize($respAmount) !== money_sanitize($data['transaction']['local_net_amount'])) {
+                                echo '<div class="alert alert-danger" role="alert">Payment amount mismatch.</div><style>.loading-123412341234{display: none;}</style>';
+                                return;
+                            }
+                        }
+
+                        $respCurrency = $decode_response['data']['currency'] ?? ($decode_response['data']['payment_currency'] ?? null);
+                        if ($respCurrency !== null && !empty($respCurrency) && isset($data['transaction']['local_currency'])) {
+                            if (strtoupper((string)$respCurrency) !== strtoupper((string)$data['transaction']['local_currency'])) {
+                                echo '<div class="alert alert-danger" role="alert">Payment currency mismatch.</div><style>.loading-123412341234{display: none;}</style>';
+                                return;
+                            }
+                        }
+
+                        $verified_trx_id = (string)($decode_response['data']['trx_id'] ?? '');
+                        if (empty($verified_trx_id)) {
+                            echo '<div class="alert alert-danger" role="alert">Invalid transaction ID from PayStation.</div><style>.loading-123412341234{display: none;}</style>';
+                            return;
+                        }
+
+                        $payer_mobile_no = $decode_response['data']['payer_mobile_no'] ?? '--';
+                        $payment_method = $decode_response['data']['payment_method'] ?? '--';
                         
                         $moreinfo = [
                             [
@@ -167,14 +225,14 @@
                             ]
                         ];
 
-                        pp_set_transaction_status($data['transaction']['ref'], 'completed', $data['gateway']['gateway_id'], $verified_trx_id, $moreinfo);
+                        pp_set_transaction_status($ref, 'completed', $data['gateway']['gateway_id'], $verified_trx_id, $moreinfo);
 
                         echo "<script>location.reload();</script>";
                     }else{
-                        echo '<div class="alert alert-danger" role="alert">'.$responseData.'</div>';
+                        echo '<div class="alert alert-danger" role="alert">'.htmlspecialchars((string)$responseData, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'</div><style>.loading-123412341234{display: none;}</style>';
                     }
                 }else{
-                    echo '<div class="alert alert-danger" role="alert">'.$responseData.'</div>';
+                    echo '<div class="alert alert-danger" role="alert">'.htmlspecialchars((string)$responseData, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'</div><style>.loading-123412341234{display: none;}</style>';
                 }
             }
         }

@@ -682,18 +682,18 @@
                         if (item.status === 'inactive') badge = 'danger';
 
                         html += `
-                            <tr data-id="${item.id}">
+                            <tr data-id="${escapeHtml(item.id)}">
                                 <td><input class="form-check-input m-0 align-middle table-selectable-check rowCheckbox" type="checkbox" aria-label="Select invoice"></td>
-                                <td ${redirectEdit}>${item.simslot}</td>
-                                <td ${redirectEdit}>${item.payment_method}</td>
-                                <td ${redirectEdit}>${item.payment_type}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.simslot)}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.payment_method)}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.payment_type)}</td>
                                 <td>
                                     <div class="input-group" style=" max-width: 150px; min-width: 150px; ">
-                                       <input type="text" value="${item.current_balance}" class="form-control" id="tr-data${item.id}" onchange="updateItem('${item.id}')">
+                                       <input type="text" value="${escapeHtml(item.current_balance)}" class="form-control" id="tr-data${escapeHtml(item.id)}" onchange="updateItem('${escapeHtml(item.id)}')">
                                     </div>
                                 </td>
-                                <td ${redirectEdit}>${item.created_date}</td>
-                                <td ${redirectEdit}><span class="badge bg-${badge} me-1"></span> ${item.status.charAt(0).toUpperCase() + item.status.slice(1)}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.created_date)}</td>
+                                <td ${redirectEdit}><span class="badge bg-${badge} me-1"></span> ${escapeHtml(item.status.charAt(0).toUpperCase() + item.status.slice(1))}</td>
                                 <td class="text-end">
                                     <span class="dropdown" style="position: unset;">
                                         <button class="btn dropdown-toggle align-text-top" data-bs-boundary="viewport" data-bs-toggle="dropdown" aria-expanded="false">Actions</button>

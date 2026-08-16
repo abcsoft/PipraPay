@@ -22,9 +22,8 @@
         http_response_code(403);
         exit('Invalid slug');
     }else{
-        $ref = escape_string($ref);
-
-        $response_gateway = json_decode(getData($db_prefix.'gateways','WHERE gateway_id = "'.$ref.'" AND brand_id = "'.$global_response_brand['response'][0]['brand_id'].'"'),true);
+        $gwParams = [':gateway_id' => $ref, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+        $response_gateway = json_decode(getData($db_prefix.'gateways','WHERE gateway_id = :gateway_id AND brand_id = :brand_id', '* FROM', $gwParams),true);
         if($response_gateway['status'] == false){
             http_response_code(403);
             exit('Invalid slug');
@@ -393,7 +392,8 @@
                             ?>
 
                             <?php foreach($fields as $field):
-                                $response_optionValue = json_decode(getData($db_prefix.'gateways_parameter','WHERE gateway_id = "'.$ref.'" AND brand_id = "'.$global_response_brand['response'][0]['brand_id'].'" AND option_name = "'.$field['name'].'"'),true);
+                                $optParams = [':gateway_id' => $ref, ':brand_id' => $global_response_brand['response'][0]['brand_id'], ':option_name' => $field['name']];
+                                $response_optionValue = json_decode(getData($db_prefix.'gateways_parameter','WHERE gateway_id = :gateway_id AND brand_id = :brand_id AND option_name = :option_name', '* FROM', $optParams),true);
 
                                 $value = (($field['value'] ?? '') === '--') ? '' : ($field['value'] ?? '');
 

@@ -392,17 +392,17 @@
                         }
 
                         html += `
-                            <tr data-id="${item.id}">
+                            <tr data-id="${escapeHtml(item.id)}">
                                 <td><input class="form-check-input m-0 align-middle table-selectable-check rowCheckbox" type="checkbox" aria-label="Select invoice"></td>
                                 <td ${redirectEdit}>
                                     <div class="d-flex py-1 align-items-center">
                                         <div class="flex-fill">
-                                            <div class="font-weight-medium">${item.identify_name}</div>
-                                            <div class="text-secondary">${item.name}</div>
+                                            <div class="font-weight-medium">${escapeHtml(item.identify_name)}</div>
+                                            <div class="text-secondary">${escapeHtml(item.name)}</div>
                                         </div>
                                     </div>
                                 </td>
-                                <td ${redirectEdit}>${item.created_date}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.created_date)}</td>
                                 <td class="text-end">
                                     <span class="dropdown" style="position: unset;">
                                         <button ${manageAble} class="btn dropdown-toggle align-text-top" data-bs-boundary="viewport" data-bs-toggle="dropdown" aria-expanded="false">Actions</button>

@@ -22,9 +22,8 @@
         http_response_code(403);
         exit('Invalid staff id');
     }else{
-        $staff_id = escape_string($staff_id);
-
-        $response_staff = json_decode(getData($db_prefix.'admin','WHERE a_id = "'.$staff_id.'" AND role = "staff"'),true);
+        $queryParams = [':staff_id' => $staff_id];
+        $response_staff = json_decode(getData($db_prefix.'admin','WHERE a_id = :staff_id AND role = "staff"', '* FROM', $queryParams),true);
         if($response_staff['status'] == true){
             if($global_user_response['response'][0]['id'] == $staff_id){
                 http_response_code(403);

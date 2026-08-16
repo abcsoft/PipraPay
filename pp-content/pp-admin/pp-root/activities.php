@@ -168,11 +168,11 @@ if (!defined('PipraPay_INIT')) {
 
                         html += `
                             <tr ${bgColor}>
-                                <td><span class="text-secondary">${item.browser}</span></td>
-                                <td>${item.device}</td>
-                                <td>${item.ip}</td>
-                                <td>${item.created_date}</td>
-                                <td><span class="badge bg-${badge} me-1"></span> ${item.status.charAt(0).toUpperCase() + item.status.slice(1)}</td>
+                                <td><span class="text-secondary">${escapeHtml(item.browser)}</span></td>
+                                <td>${escapeHtml(item.device)}</td>
+                                <td>${escapeHtml(item.ip)}</td>
+                                <td>${escapeHtml(item.created_date)}</td>
+                                <td><span class="badge bg-${badge} me-1"></span> ${escapeHtml(item.status.charAt(0).toUpperCase() + item.status.slice(1))}</td>
                             </tr>
                         `;
                     });

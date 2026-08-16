@@ -22,12 +22,12 @@ if (!defined('PipraPay_INIT')) {
         http_response_code(403);
         exit('Invalid staff id');
     }else{
-        $staff_id = escape_string($staff_id);
-
-        $response_permission = json_decode(getData($db_prefix.'permission','WHERE id = "'.$staff_id.'"'),true);
+        $permParams = [':id' => $staff_id];
+        $response_permission = json_decode(getData($db_prefix.'permission','WHERE id = :id', '* FROM', $permParams),true);
         if($response_permission['status'] == true){
 
-            $response_staff = json_decode(getData($db_prefix.'admin','WHERE a_id = "'.$response_permission['response'][0]['a_id'].'" AND role = "staff"'),true);
+            $staffParams = [':a_id' => $response_permission['response'][0]['a_id']];
+            $response_staff = json_decode(getData($db_prefix.'admin','WHERE a_id = :a_id AND role = "staff"', '* FROM', $staffParams),true);
             if($response_staff['status'] == true){
                 if($global_user_response['response'][0]['id'] == $response_staff['response'][0]['id']){
                     http_response_code(403);

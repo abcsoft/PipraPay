@@ -529,11 +529,11 @@
                         if (item.status === 'inactive') badge = 'danger';
 
                         html += `
-                            <tr data-id="${item.id}">
+                            <tr data-id="${escapeHtml(item.id)}">
                                 <td><input class="form-check-input m-0 align-middle table-selectable-check rowCheckbox" type="checkbox" aria-label="Select invoice"></td>
-                                <td ${redirectEdit}>${item.domain}</td>
-                                <td ${redirectEdit}>${item.created_date}</td>
-                                <td ${redirectEdit}><span class="badge bg-${badge} me-1"></span> ${item.status.charAt(0).toUpperCase() + item.status.slice(1)}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.domain)}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.created_date)}</td>
+                                <td ${redirectEdit}><span class="badge bg-${badge} me-1"></span> ${escapeHtml(item.status.charAt(0).toUpperCase() + item.status.slice(1))}</td>
                                 <td class="text-end">
                                     <span class="dropdown" style="position: unset;">
                                         <button class="btn dropdown-toggle align-text-top" data-bs-boundary="viewport" data-bs-toggle="dropdown" aria-expanded="false">Actions</button>

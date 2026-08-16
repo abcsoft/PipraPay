@@ -711,17 +711,17 @@
                         if (item.status === 'used') badge = 'primary';
 
                         html += `
-                            <tr data-id="${item.id}">
+                            <tr data-id="${escapeHtml(item.id)}">
                                 <td><input class="form-check-input m-0 align-middle table-selectable-check rowCheckbox" type="checkbox" aria-label="Select invoice"></td>
-                                <td ${redirectEdit}>${item.device}</td>
-                                <td ${redirectEdit}>${item.payment_method}</td>
-                                <td ${redirectEdit}>${item.type}</td>
-                                <td ${redirectEdit}>${item.mobileNumber}</td>
-                                <td ${redirectEdit}>${item.transaction_id}</td>
-                                <td ${redirectEdit}>${item.amount}</td>
-                                <td ${redirectEdit}>${item.balance}</td>
-                                <td ${redirectEdit}>${item.created_date}</td>
-                                <td ${redirectEdit}><span class="badge bg-${badge} me-1"></span> ${item.status.charAt(0).toUpperCase() + item.status.slice(1)}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.device)}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.payment_method)}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.type)}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.mobileNumber)}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.transaction_id)}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.amount)}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.balance)}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.created_date)}</td>
+                                <td ${redirectEdit}><span class="badge bg-${badge} me-1"></span> ${escapeHtml(item.status.charAt(0).toUpperCase() + item.status.slice(1))}</td>
                                 <td class="text-end">
                                     <span class="dropdown" style="position: unset;">
                                         <button class="btn dropdown-toggle align-text-top" data-bs-boundary="viewport" data-bs-toggle="dropdown" aria-expanded="false">Actions</button>

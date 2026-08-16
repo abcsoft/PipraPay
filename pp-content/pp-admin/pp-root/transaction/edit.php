@@ -22,11 +22,11 @@ if (!defined('PipraPay_INIT')) {
         http_response_code(403);
         exit('Invalid transaction id');
     }else{
-        $ref = escape_string($ref);
-
-        $response_transaction = json_decode(getData($db_prefix.'transaction','WHERE ref = "'.$ref.'" AND brand_id = "'.$global_response_brand['response'][0]['brand_id'].'" AND status NOT IN ("initiated")'),true);
+        $queryParams = [':ref' => $ref, ':brand_id' => $global_response_brand['response'][0]['brand_id']];
+        $response_transaction = json_decode(getData($db_prefix.'transaction','WHERE ref = :ref AND brand_id = :brand_id AND status NOT IN ("initiated")', '* FROM', $queryParams),true);
         if($response_transaction['status'] == true){
-            $response_gateway = json_decode(getData($db_prefix.'gateways',' WHERE brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" AND gateway_id = "'.$response_transaction['response'][0]['gateway_id'].'"'),true);
+            $gwParams = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':gateway_id' => $response_transaction['response'][0]['gateway_id']];
+            $response_gateway = json_decode(getData($db_prefix.'gateways','WHERE brand_id = :brand_id AND gateway_id = :gateway_id', '* FROM', $gwParams),true);
 
             $gateway_name = $response_gateway['response'][0]['name'] ?? 'Unknow';
 
@@ -180,7 +180,7 @@ if (!defined('PipraPay_INIT')) {
                                                 <div class="col-md-4 mb-2">
                                                     <label class="form-label">Gateway</label>
 
-                                                    <p class="m-0 text-dark form-label"><?php echo $gateway_name?></p>
+                                                    <p class="m-0 text-dark form-label"><?php echo htmlspecialchars((string)$gateway_name, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')?></p>
                                                 </div>
 
                                                 <div class="col-md-4 mb-2">
@@ -192,7 +192,7 @@ if (!defined('PipraPay_INIT')) {
                                                 <div class="col-md-4 mb-2">
                                                     <label class="form-label">Sender</label>
 
-                                                    <p class="m-0 text-dark form-label"><?php echo $response_transaction['response'][0]['sender']?></p>
+                                                    <p class="m-0 text-dark form-label"><?php echo htmlspecialchars((string)$response_transaction['response'][0]['sender'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')?></p>
                                                 </div>
 
                                                 <?php
@@ -201,7 +201,7 @@ if (!defined('PipraPay_INIT')) {
                                                         <div class="col-md-4 mb-2">
                                                             <label class="form-label">Payment Slip</label>
 
-                                                            <p class="m-0 text-dark form-label"><a href="<?php echo $response_transaction['response'][0]['trx_slip']?>" target="blank">View</a></p>
+                                                            <p class="m-0 text-dark form-label"><a href="<?php echo filter_var($response_transaction['response'][0]['trx_slip'], FILTER_VALIDATE_URL) ? htmlspecialchars((string)$response_transaction['response'][0]['trx_slip'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : '#'?>" target="_blank">View</a></p>
                                                         </div>
                                                 <?php
                                                     }else{
@@ -209,7 +209,7 @@ if (!defined('PipraPay_INIT')) {
                                                         <div class="col-md-4 mb-2">
                                                             <label class="form-label">Transaction Id</label>
 
-                                                            <p class="m-0 text-dark form-label"><?php echo $response_transaction['response'][0]['trx_id']?></p>
+                                                            <p class="m-0 text-dark form-label"><?php echo htmlspecialchars((string)$response_transaction['response'][0]['trx_id'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')?></p>
                                                         </div>
                                                 <?php
                                                     }
@@ -270,19 +270,19 @@ if (!defined('PipraPay_INIT')) {
                                                 <div class="col-md-4 mb-2">
                                                     <label class="form-label">Full Name</label>
 
-                                                    <p class="m-0 text-dark form-label"><?php echo $customer_info['name'] ?? '' ?></p>
+                                                    <p class="m-0 text-dark form-label"><?php echo htmlspecialchars((string)($customer_info['name'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></p>
                                                 </div>
 
                                                 <div class="col-md-4 mb-2">
                                                     <label class="form-label">Email Address</label>
 
-                                                    <p class="m-0 text-dark form-label"><?php echo $customer_info['email'] ?? '' ?></p>
+                                                    <p class="m-0 text-dark form-label"><?php echo htmlspecialchars((string)($customer_info['email'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></p>
                                                 </div>
 
                                                 <div class="col-md-4 mb-2">
                                                     <label class="form-label">Mobile Number</label>
 
-                                                    <p class="m-0 text-dark form-label"><?php echo $customer_info['mobile'] ?? '' ?></p>
+                                                    <p class="m-0 text-dark form-label"><?php echo htmlspecialchars((string)($customer_info['mobile'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></p>
                                                 </div>
                                             </div>
                                         </div>
@@ -300,9 +300,9 @@ if (!defined('PipraPay_INIT')) {
                                                         foreach($metadata as $key => $value){
                                                 ?>
                                                             <div class="col-md-4 mb-2">
-                                                                <label class="form-label"><?php echo $key?></label>
+                                                                <label class="form-label"><?php echo htmlspecialchars((string)$key, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')?></label>
 
-                                                                <p class="m-0 text-dark form-label"><?php echo $value ?? '' ?></p>
+                                                                <p class="m-0 text-dark form-label"><?php echo htmlspecialchars((string)($value ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></p>
                                                             </div>
                                                 <?php
                                                         }
@@ -339,9 +339,9 @@ if (!defined('PipraPay_INIT')) {
                                                                     <?php
                                                                         // Auto-link if value is a URL
                                                                         if (filter_var($description, FILTER_VALIDATE_URL)) {
-                                                                            echo '<a href="'.htmlspecialchars($description).'" target="_blank">View</a>';
+                                                                            echo '<a href="'.htmlspecialchars($description, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'" target="_blank">View</a>';
                                                                         } else {
-                                                                            echo htmlspecialchars($description);
+                                                                            echo htmlspecialchars($description, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
                                                                         }
                                                                     ?>
                                                                 </p>
@@ -370,12 +370,12 @@ if (!defined('PipraPay_INIT')) {
                                             <div class="row g-3" style=" margin-bottom: -1rem; ">
                                                 <div class="col-md-4 mb-2">
                                                     <label class="form-label">Return URL</label>
-                                                    <p class="m-0 text-dark form-label"><?php echo ($response_transaction['response'][0]['return_url'] == "--" || $response_transaction['response'][0]['return_url'] == "") ? '' : $response_transaction['response'][0]['return_url']; ?></p>
+                                                    <p class="m-0 text-dark form-label"><?php echo htmlspecialchars((string)(($response_transaction['response'][0]['return_url'] == "--" || $response_transaction['response'][0]['return_url'] == "") ? '' : $response_transaction['response'][0]['return_url']), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></p>
                                                 </div>
 
                                                 <div class="col-md-4 mb-2">
                                                     <label class="form-label">Webhook URL</label>
-                                                    <p class="m-0 text-dark form-label"><?php echo ($response_transaction['response'][0]['webhook_url'] == "--" || $response_transaction['response'][0]['webhook_url'] == "") ? '' : $response_transaction['response'][0]['webhook_url']; ?></p>
+                                                    <p class="m-0 text-dark form-label"><?php echo htmlspecialchars((string)(($response_transaction['response'][0]['webhook_url'] == "--" || $response_transaction['response'][0]['webhook_url'] == "") ? '' : $response_transaction['response'][0]['webhook_url']), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); ?></p>
                                                 </div>
                                             </div>
                                         </div>

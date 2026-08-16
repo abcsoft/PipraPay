@@ -150,6 +150,118 @@
         }
     }
 
+    function ensureTransactionRefUniqueConstraint() {
+        global $db_prefix;
+        static $migrated = false;
+        if ($migrated) return;
+        $db_prefix_str = $db_prefix ?? 'pp_';
+        $tableName = $db_prefix_str . 'transaction';
+
+        try {
+            $pdo = connectDatabase();
+            $stmt = $pdo->query("SHOW INDEX FROM `{$tableName}` WHERE Key_name = 'uq_transaction_ref'");
+            if ($stmt && $stmt->rowCount() === 0) {
+                $pdo->exec("ALTER TABLE `{$tableName}` ADD UNIQUE KEY `uq_transaction_ref` (`ref`)");
+            }
+            $migrated = true;
+        } catch (Throwable $e) {
+            // Silently catch
+        }
+    }
+
+    /**
+     * Diagnostic query to detect duplicate provider transaction IDs before migration:
+     * 
+     * SELECT gateway_id, TRIM(trx_id), COUNT(*)
+     * FROM pp_transaction
+     * WHERE TRIM(trx_id) NOT IN ('', '--')
+     * GROUP BY gateway_id, TRIM(trx_id)
+     * HAVING COUNT(*) > 1;
+     */
+    function ensureTransactionTrxIdUniqueConstraint() {
+        global $db_prefix;
+        static $migrated = false;
+        if ($migrated) return;
+        $db_prefix_str = $db_prefix ?? 'pp_';
+        $tableName = $db_prefix_str . 'transaction';
+
+        try {
+            $pdo = connectDatabase();
+
+            $checkCol = $pdo->query("SHOW COLUMNS FROM `{$tableName}` LIKE 'trx_id_unique'");
+            $hasCol = ($checkCol && $checkCol->rowCount() > 0);
+
+            $checkIdx = $pdo->query("SHOW INDEX FROM `{$tableName}` WHERE Key_name = 'uniq_gateway_trx_id'");
+            $hasIdx = ($checkIdx && $checkIdx->rowCount() > 0);
+
+            if ($hasCol && $hasIdx) {
+                $migrated = true;
+                return;
+            }
+
+            $dupCheck = $pdo->query("
+                SELECT gateway_id, TRIM(trx_id) AS clean_trx, COUNT(*) as cnt 
+                FROM `{$tableName}` 
+                WHERE TRIM(trx_id) NOT IN ('', '--')
+                GROUP BY gateway_id, TRIM(trx_id) 
+                HAVING cnt > 1
+                LIMIT 1
+            ");
+
+            if ($dupCheck && $dupCheck->rowCount() > 0) {
+                error_log("MIGRATION FAILURE: Cannot apply uniq_gateway_trx_id constraint. Duplicate transaction IDs exist in {$tableName}. Run diagnostic query to resolve.");
+                return;
+            }
+
+            if (!$hasCol && !$hasIdx) {
+                $sql = "ALTER TABLE `{$tableName}`
+                    ADD COLUMN `trx_id_unique` VARCHAR(70)
+                        GENERATED ALWAYS AS (
+                            CASE
+                                WHEN TRIM(`trx_id`) = ''
+                                  OR TRIM(`trx_id`) = '--'
+                                THEN NULL
+                                ELSE TRIM(`trx_id`)
+                            END
+                        ) STORED
+                        AFTER `trx_id`,
+                    ADD UNIQUE KEY `uniq_gateway_trx_id`
+                        (`gateway_id`, `trx_id_unique`)";
+                $pdo->exec($sql);
+            } elseif (!$hasIdx && $hasCol) {
+                $sql = "ALTER TABLE `{$tableName}`
+                    ADD UNIQUE KEY `uniq_gateway_trx_id`
+                        (`gateway_id`, `trx_id_unique`)";
+                $pdo->exec($sql);
+            }
+
+            $migrated = true;
+        } catch (Throwable $e) {
+            error_log("ensureTransactionTrxIdUniqueConstraint error: " . $e->getMessage());
+        }
+    }
+
+    function insertTransactionRecord($columns, $values, $refIndex = 1, $maxRetries = 5, ?PDO $existingPdo = null) {
+        ensureTransactionRefUniqueConstraint();
+        ensureTransactionTrxIdUniqueConstraint();
+        global $db_prefix;
+
+        for ($attempt = 0; $attempt < $maxRetries; $attempt++) {
+            if ($attempt > 0) {
+                $values[$refIndex] = generateItemID(27, 27);
+            }
+            try {
+                $res = insertData($db_prefix . 'transaction', $columns, $values, $existingPdo);
+                if ($res) {
+                    return $values[$refIndex];
+                }
+            } catch (Throwable $e) {
+                // Retry on duplicate ref collision
+            }
+        }
+        return false;
+    }
+
     function authenticateCompanionDeviceToken(string $token) {
         global $db_prefix;
         if (empty($token)) {
@@ -168,6 +280,29 @@
 
         $response = json_decode(getData($db_prefix.'device', 'WHERE (token = :token OR token_hash = :token_hash OR otp = :otp_token) AND status = :status', '* FROM', $params), true);
         if (is_array($response) && isset($response['status']) && $response['status'] == true && !empty($response['response'])) {
+            $deviceRow = $response['response'][0];
+            $d_id = $deviceRow['d_id'] ?? '';
+            if (empty($d_id)) {
+                return false;
+            }
+
+            $logParams = [ ':cookie' => $d_id, ':status' => 'active' ];
+            $responseLog = json_decode(getData($db_prefix.'browser_log', 'WHERE cookie = :cookie AND status = :status', '* FROM', $logParams), true);
+            if (!is_array($responseLog) || empty($responseLog['status']) || empty($responseLog['response'])) {
+                return false;
+            }
+
+            $a_id = $responseLog['response'][0]['a_id'] ?? '';
+            if (empty($a_id)) {
+                return false;
+            }
+
+            $adminParams = [ ':a_id' => $a_id, ':status' => 'active' ];
+            $responseAdmin = json_decode(getData($db_prefix.'admin', 'WHERE a_id = :a_id AND status = :status', '* FROM', $adminParams), true);
+            if (!is_array($responseAdmin) || empty($responseAdmin['status']) || empty($responseAdmin['response'])) {
+                return false;
+            }
+
             return $response;
         }
         return false;
@@ -224,7 +359,9 @@
 
             return $pdo;
         } catch (PDOException $e) {
-            die('Database connection failed: ' . $e->getMessage());
+            error_log('Database connection error: ' . $e->getMessage());
+            http_response_code(500);
+            die('Database connection failed.');
         }
     }
 
@@ -342,6 +479,30 @@
     
     // Logout: clear all cookies and destroy session
     function logoutCookie() {
+        global $db_prefix;
+
+        $db_prefix_str = $db_prefix ?? 'pp_';
+        $activeCookies = array_filter([
+            $_COOKIE['pp_admin'] ?? null,
+            $_COOKIE['pp_2fa'] ?? null
+        ]);
+
+        if (!empty($activeCookies) && function_exists('connectDatabase')) {
+            try {
+                $pdo = connectDatabase();
+                $stmt = $pdo->prepare("UPDATE `{$db_prefix_str}browser_log` SET `status` = :status, `updated_date` = :updated_date WHERE `cookie` = :cookie");
+                foreach ($activeCookies as $token) {
+                    $stmt->execute([
+                        ':status'       => 'expired',
+                        ':updated_date' => date('Y-m-d H:i:s'),
+                        ':cookie'       => $token
+                    ]);
+                }
+            } catch (Throwable $e) {
+                // Ignore database errors to ensure client-side logout completes
+            }
+        }
+
         // Expire all cookies
         foreach ($_COOKIE as $name => $value) {
             setcookie($name, '', [
@@ -408,8 +569,8 @@
         }
     }
 
-    function insertData($tableName, $columns, $values) {
-        $pdo = connectDatabase(); 
+    function insertData($tableName, $columns, $values, ?PDO $existingPdo = null) {
+        $pdo = $existingPdo ?? connectDatabase(); 
 
         try {
             $stmtColumns = $pdo->prepare("SHOW COLUMNS FROM `$tableName`");
@@ -458,8 +619,8 @@
         }
     }
 
-    function updateData($tableName, $columns, $values, $condition) {
-        $pdo = connectDatabase(); 
+    function updateData($tableName, $columns, $values, $condition, $conditionParams = [], ?PDO $existingPdo = null) {
+        $pdo = $existingPdo ?? connectDatabase(); 
 
         $setClauses = [];
         foreach ($columns as $index => $col) {
@@ -480,6 +641,12 @@
                 $stmt->bindValue(":val$index", $value);
             }
 
+            if (!empty($conditionParams)) {
+                foreach ($conditionParams as $param => $val) {
+                    $stmt->bindValue($param, $val);
+                }
+            }
+
             return $stmt->execute(); 
         } catch (PDOException $e) {
             error_log("updateData PDO Error: " . $e->getMessage());
@@ -487,13 +654,18 @@
         }
     }
 
-    function deleteData($tableName, $condition) {
+    function deleteData($tableName, $condition, $conditionParams = []) {
         $pdo = connectDatabase(); // PDO connection
 
         $sql = "DELETE FROM `$tableName` WHERE $condition";
 
         try {
             $stmt = $pdo->prepare($sql);
+            if (!empty($conditionParams)) {
+                foreach ($conditionParams as $param => $val) {
+                    $stmt->bindValue($param, $val);
+                }
+            }
             return $stmt->execute(); // returns true/false
         } catch (PDOException $e) {
             error_log("deleteData PDO Error: " . $e->getMessage());
@@ -523,9 +695,14 @@
         return $count; 
     }
 
-    function generateStrongPassword($length = 8) {
+    function generateStrongPassword($length = 12) {
         $chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@#$%&!';
-        return substr(str_shuffle(str_repeat($chars, 5)), 0, $length);
+        $charsLen = strlen($chars);
+        $password = '';
+        for ($i = 0; $i < $length; $i++) {
+            $password .= $chars[random_int(0, $charsLen - 1)];
+        }
+        return $password;
     }
 
     function generateItemID($length = 10, $maxLength = 10)
@@ -535,7 +712,7 @@
 
         $id = '';
         for ($i = 0; $i < $length; $i++) {
-            $id .= mt_rand(0, 9);
+            $id .= random_int(0, 9);
         }
 
         return $id;
@@ -614,12 +791,25 @@
         return bcdiv($a, $b, $scale);
     }
 
-    function money_round($amount, int $decimals = 2): string {
-        $amount = money_sanitize($amount);
-        $factor = bcpow('10', (string)($decimals + 1));
-        $tmp = bcmul($amount, $factor, 0);
-        $tmp = bcdiv($tmp, '10', 0); 
-        return bcdiv($tmp, bcpow('10', (string)$decimals), $decimals);
+    function money_round($amount, int $decimals = 2) {
+        if (!is_numeric($amount)) {
+            $amount = (float) money_sanitize($amount);
+        }
+        return round((float) $amount, $decimals, PHP_ROUND_HALF_UP);
+    }
+
+    function mask_api_key($key) {
+        if (!is_string($key) || $key === '') {
+            return '';
+        }
+        $len = strlen($key);
+        if ($len <= 8) {
+            return str_repeat('*', $len);
+        }
+
+        return substr($key, 0, 4)
+            . str_repeat('*', max(4, $len - 8))
+            . substr($key, -4);
     }
 
     function pp_get_gateway_options($gateway_id = '', $brand_id = ''){
@@ -800,11 +990,244 @@
         return strtolower($host);
     }
 
+    function getDomainFromUrl($url) {
+        if (is_string($url) && filter_var($url, FILTER_VALIDATE_URL)) {
+            $parsed = parse_url($url, PHP_URL_HOST);
+            return $parsed ? strtolower($parsed) : false;
+        }
+        return false;
+    }
+
+    function getCurlResolveRule(string $url, string $validatedIp): ?string {
+        $parts = parse_url($url);
+        if (!isset($parts['host'])) {
+            return null;
+        }
+        $host = strtolower(trim($parts['host']));
+        $scheme = strtolower($parts['scheme'] ?? 'http');
+        $port = $parts['port'] ?? ($scheme === 'https' ? 443 : 80);
+
+        $ipFormatted = $validatedIp;
+        if (filter_var($validatedIp, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+            if (!str_starts_with($ipFormatted, '[')) {
+                $ipFormatted = '[' . $ipFormatted . ']';
+            }
+        }
+
+        return "{$host}:{$port}:{$ipFormatted}";
+    }
+
+    function ipInCidr(string $ip, string $cidr): bool {
+        if (strpos($cidr, '/') === false) {
+            return strtolower($ip) === strtolower($cidr);
+        }
+
+        list($net, $mask) = explode('/', $cidr, 2);
+        $mask = (int)$mask;
+
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) && filter_var($net, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            if ($mask < 0 || $mask > 32) {
+                return false;
+            }
+            $ipLong = ip2long($ip);
+            $netLong = ip2long($net);
+            if ($ipLong === false || $netLong === false) {
+                return false;
+            }
+            $netmask = $mask === 0 ? 0 : (~0 << (32 - $mask));
+            return ($ipLong & $netmask) === ($netLong & $netmask);
+        }
+
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) && filter_var($net, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+            if ($mask < 0 || $mask > 128) {
+                return false;
+            }
+            $ipBin = inet_pton($ip);
+            $netBin = inet_pton($net);
+            if ($ipBin === false || $netBin === false) {
+                return false;
+            }
+
+            $bytes = (int)ceil($mask / 8);
+            $rem = $mask % 8;
+
+            for ($i = 0; $i < $bytes; $i++) {
+                $b1 = ord($ipBin[$i]);
+                $b2 = ord($netBin[$i]);
+                if ($i === $bytes - 1 && $rem > 0) {
+                    $m = (0xFF << (8 - $rem)) & 0xFF;
+                    if (($b1 & $m) !== ($b2 & $m)) {
+                        return false;
+                    }
+                } else {
+                    if ($b1 !== $b2) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    function isPublicIp(string $ip): bool {
+        if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+            return false;
+        }
+
+        $flags = FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE;
+        if (defined('FILTER_FLAG_GLOBAL_RANGE')) {
+            $flags |= FILTER_FLAG_GLOBAL_RANGE;
+        }
+
+        if (!filter_var($ip, FILTER_VALIDATE_IP, $flags)) {
+            return false;
+        }
+
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+            if (stripos($ip, '::ffff:') === 0 || stripos($ip, ':ffff:') !== false) {
+                $parts = explode(':', $ip);
+                $last = end($parts);
+                if (filter_var($last, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                    return isPublicIp($last);
+                }
+            }
+        }
+
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            $nonGlobalV4 = [
+                '0.0.0.0/8',
+                '10.0.0.0/8',
+                '100.64.0.0/10',
+                '127.0.0.0/8',
+                '169.254.0.0/16',
+                '172.16.0.0/12',
+                '192.0.0.0/24',
+                '192.0.2.0/24',
+                '192.88.99.0/24',
+                '192.168.0.0/16',
+                '198.18.0.0/15',
+                '198.51.100.0/24',
+                '203.0.113.0/24',
+                '224.0.0.0/4',
+                '240.0.0.0/4',
+                '255.255.255.255/32'
+            ];
+            foreach ($nonGlobalV4 as $cidr) {
+                if (ipInCidr($ip, $cidr)) {
+                    return false;
+                }
+            }
+        }
+
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+            $nonGlobalV6 = [
+                '::/128',
+                '::1/128',
+                '100::/64',
+                '2001:db8::/32',
+                'fc00::/7',
+                'fe80::/10',
+                'ff00::/8'
+            ];
+            foreach ($nonGlobalV6 as $cidr) {
+                if (ipInCidr($ip, $cidr)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    function is_safe_webhook_url(string $url, ?string &$validatedIp = null): bool {
+        $validatedIp = null;
+        if (!is_string($url) || trim($url) === '' || trim($url) === '--') {
+            return false;
+        }
+
+        // Parse URL safely
+        $parts = parse_url($url);
+        if (!$parts || empty($parts['host'])) {
+            return false;
+        }
+
+        // Scheme check: Only HTTP or HTTPS
+        $scheme = strtolower($parts['scheme'] ?? '');
+        if (!in_array($scheme, ['http', 'https'], true)) {
+            return false;
+        }
+
+        $host = strtolower($parts['host']);
+
+        // Check if host is loopback hostname
+        if (isLoopbackHost($host)) {
+            return false;
+        }
+
+        // Handle raw IP literal vs hostname
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
+            $ipForCheck = $host;
+            if (!isPublicIp($ipForCheck)) {
+                return false;
+            }
+            $validatedIp = $ipForCheck;
+            return true;
+        }
+
+        $records = [];
+        $aRecords = @dns_get_record($host, DNS_A);
+        if (is_array($aRecords)) {
+            foreach ($aRecords as $r) {
+                if (!empty($r['ip'])) {
+                    $records[] = $r['ip'];
+                }
+            }
+        }
+        $aaaaRecords = @dns_get_record($host, DNS_AAAA);
+        if (is_array($aaaaRecords)) {
+            foreach ($aaaaRecords as $r) {
+                if (!empty($r['ipv6'])) {
+                    $records[] = $r['ipv6'];
+                }
+            }
+        }
+
+        if (empty($records)) {
+            $v4List = @gethostbynamel($host);
+            if (is_array($v4List)) {
+                $records = array_merge($records, $v4List);
+            }
+        }
+
+        if (empty($records)) {
+            return false;
+        }
+
+        $validIps = [];
+        foreach ($records as $ip) {
+            if (!isPublicIp($ip)) {
+                return false;
+            }
+            $validIps[] = $ip;
+        }
+
+        $validatedIp = $validIps[0];
+        return true;
+    }
+
     function sendIPN(string $url, array $payload): int {
+        $validatedIp = null;
+        if (!is_safe_webhook_url($url, $validatedIp) || empty($validatedIp)) {
+            return 0;
+        }
+
+        $resolveRule = getCurlResolveRule($url, $validatedIp);
         $json = json_encode($payload, JSON_UNESCAPED_UNICODE);
 
         $ch = curl_init($url);
-        curl_setopt_array($ch, [
+        $opts = [
             CURLOPT_POST            => true,
             CURLOPT_POSTFIELDS      => $json,
             CURLOPT_HTTPHEADER      => [
@@ -813,6 +1236,7 @@
             ],
             CURLOPT_RETURNTRANSFER  => false,
             CURLOPT_HEADER          => false,
+            CURLOPT_FOLLOWLOCATION  => false,
             CURLOPT_CONNECTTIMEOUT  => 3,
             CURLOPT_TIMEOUT         => 5,
             CURLOPT_FORBID_REUSE    => true,
@@ -820,7 +1244,13 @@
             CURLOPT_SSL_VERIFYPEER  => true,
             CURLOPT_SSL_VERIFYHOST  => 2,
             CURLOPT_WRITEFUNCTION   => function($ch, $data) { return strlen($data); },
-        ]);
+        ];
+
+        if ($resolveRule !== null) {
+            $opts[CURLOPT_RESOLVE] = [$resolveRule];
+        }
+
+        curl_setopt_array($ch, $opts);
 
         $result = curl_exec($ch); 
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -840,10 +1270,18 @@
         $results = [];
 
         foreach ($jobs as $job) {
+            $url = $job['url'] ?? '';
+            $validatedIp = null;
+            if (!is_safe_webhook_url($url, $validatedIp) || empty($validatedIp)) {
+                $results[$job['id'] ?? 0] = 0;
+                continue;
+            }
+
+            $resolveRule = getCurlResolveRule($url, $validatedIp);
             $json = json_encode($job['payload'], JSON_UNESCAPED_UNICODE);
 
-            $ch = curl_init($job['url']);
-            curl_setopt_array($ch, [
+            $ch = curl_init($url);
+            $opts = [
                 CURLOPT_POST            => true,
                 CURLOPT_POSTFIELDS      => $json,
                 CURLOPT_HTTPHEADER      => [
@@ -851,6 +1289,7 @@
                     'Connection: close'
                 ],
                 CURLOPT_RETURNTRANSFER  => false,
+                CURLOPT_FOLLOWLOCATION  => false,
                 CURLOPT_CONNECTTIMEOUT  => 3,
                 CURLOPT_TIMEOUT         => 5,
                 CURLOPT_FORBID_REUSE    => true,
@@ -858,7 +1297,13 @@
                 CURLOPT_SSL_VERIFYPEER  => true,
                 CURLOPT_SSL_VERIFYHOST  => 2,
                 CURLOPT_WRITEFUNCTION   => fn($ch, $data) => strlen($data),
-            ]);
+            ];
+
+            if ($resolveRule !== null) {
+                $opts[CURLOPT_RESOLVE] = [$resolveRule];
+            }
+
+            curl_setopt_array($ch, $opts);
 
             curl_multi_add_handle($mh, $ch);
             $handles[(int)$ch] = [
@@ -890,6 +1335,75 @@
         curl_multi_close($mh);
 
         return $results; 
+    }
+
+    if (!defined('PIPRAPAY_UPDATE_PUBLIC_KEY')) {
+        define('PIPRAPAY_UPDATE_PUBLIC_KEY', "-----BEGIN PUBLIC KEY-----\n" .
+            "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArbAdqDzUE5FM5pEKsIoq\n" .
+            "r57r+9MhjoUSxqZ/5z/XZIwtBPM78AqcIlUHitWYE16ijGjymf1iKOJuHeX8OScg\n" .
+            "W4sCFrBpsaRvA9UBfwDyBkP2JEfZiWlkurnbij3YqcKMkoDV5jNpZo89Y9pdMs2U\n" .
+            "MH5nJvez7GBU7dx1RZju95tAUB3lQ69Qzf7IO6ystov0HbS7IMcMFQ/5qL9w0+Pq\n" .
+            "COM1+cekqxe1rDrVqnyBtyyS3803F1+Nx2zsbHALkbJCKewd2BLKalXjdraeCQAN\n" .
+            "LcTDX1thtAHWNK0Y4s/VlhPwP9ngNeyX2cTk1gdK1Vm5MRQAfRDEnMJyPirNt53J\n" .
+            "CQIDAQAB\n" .
+            "-----END PUBLIC KEY-----");
+    }
+
+    function verify_update_authenticity(string $zipFilePath, string $expectedHash, ?string $signatureBase64 = null): array {
+        if (!function_exists('openssl_verify')) {
+            return ['status' => false, 'message' => 'Update package verification failed: OpenSSL digital signature verification support is unavailable.'];
+        }
+
+        if (!file_exists($zipFilePath) || !is_readable($zipFilePath)) {
+            return ['status' => false, 'message' => 'Update package verification failed: Update package file is missing or unreadable.'];
+        }
+
+        $expectedHashClean = strtolower(trim($expectedHash));
+        if (empty($expectedHashClean) || !preg_match('/^[a-f0-9]{64}$/', $expectedHashClean)) {
+            return ['status' => false, 'message' => 'Update package verification failed: Missing or invalid expected SHA-256 digest.'];
+        }
+
+        $signatureClean = is_string($signatureBase64) ? trim($signatureBase64) : '';
+        if (empty($signatureClean)) {
+            return ['status' => false, 'message' => 'Update package verification failed: Missing required release digital signature.'];
+        }
+
+        $rawSignature = base64_decode($signatureClean, true);
+        if ($rawSignature === false || strlen($rawSignature) === 0) {
+            return ['status' => false, 'message' => 'Update package verification failed: Invalid base64 digital signature format.'];
+        }
+
+        $actualSha256 = hash_file('sha256', $zipFilePath);
+        if ($actualSha256 === false) {
+            return ['status' => false, 'message' => 'Update package verification failed: Failed to calculate SHA-256 digest.'];
+        }
+
+        $actualSha256Clean = strtolower($actualSha256);
+        if (!hash_equals($expectedHashClean, $actualSha256Clean)) {
+            return ['status' => false, 'message' => 'Update package verification failed: SHA-256 checksum mismatch.'];
+        }
+
+        $publicKeyPem = defined('PIPRAPAY_UPDATE_PUBLIC_KEY') ? PIPRAPAY_UPDATE_PUBLIC_KEY : null;
+        if (empty($publicKeyPem)) {
+            return ['status' => false, 'message' => 'Update package verification failed: Verification public key is missing.'];
+        }
+
+        // Canonical verification: sign/verify the 64-char lowercase hex SHA-256 digest string
+        $verifyRes = openssl_verify($actualSha256Clean, $rawSignature, $publicKeyPem, OPENSSL_ALGO_SHA256);
+
+        if ($verifyRes !== 1) {
+            // Fallback: verify against raw file contents if signed directly
+            $fileData = file_get_contents($zipFilePath);
+            if ($fileData !== false) {
+                $verifyRes = openssl_verify($fileData, $rawSignature, $publicKeyPem, OPENSSL_ALGO_SHA256);
+            }
+        }
+
+        if ($verifyRes !== 1) {
+            return ['status' => false, 'message' => 'Update package verification failed: Digital signature verification failed. Untrusted release payload.'];
+        }
+
+        return ['status' => true, 'sha256' => $actualSha256Clean];
     }
 
     function senderWhitelist(?string $sender = null, ?string $providerKey = null, string $mode = 'provider', ?string $providerName = null) {
@@ -934,7 +1448,7 @@
                 'name'     => 'Ok Wallet',
                 'currency' => 'BDT',
                 'balance_verify' => 'true',
-                'senders'  => ['01847-348685'],
+                'senders'  => ['01847348685'],
             ],
             'mcash' => [
                 'name'     => 'mCash',
@@ -958,7 +1472,7 @@
                 'name'     => 'Ipay',
                 'currency' => 'BDT',
                 'balance_verify' => 'true',
-                'senders'  => ['09638-900800'],
+                'senders'  => ['09638900800'],
             ],
         ];
 
@@ -1720,16 +2234,86 @@
         closedir($dir);
     }
 
-    function zipFolder($source, $zipFile) {
-        $zip = new ZipArchive;
-        $zip->open($zipFile, ZipArchive::CREATE);
-        $files = new RecursiveIteratorIterator(
-            new RecursiveDirectoryIterator($source)
-        );
+    function ensureBackupDirProtected($backupDir) {
+        if (!file_exists($backupDir)) {
+            @mkdir($backupDir, 0755, true);
+        }
+        $htaccessFile = rtrim($backupDir, '/\\') . '/.htaccess';
+        if (!file_exists($htaccessFile)) {
+            @file_put_contents($htaccessFile, "Require all denied\n");
+        }
+        $indexFile = rtrim($backupDir, '/\\') . '/index.php';
+        if (!file_exists($indexFile)) {
+            @file_put_contents($indexFile, "<?php\nif (!defined('PipraPay_INIT')) {\n    http_response_code(403);\n    exit('Direct access not allowed');\n}\n");
+        }
+    }
 
-        foreach ($files as $file) {
-            if (!$file->isDir()) {
-                $zip->addFile($file, substr($file, strlen($source) + 1));
+    function zipFolder($source, $zipFile) {
+        $canonicalSource = realpath($source);
+        if ($canonicalSource === false) {
+            return;
+        }
+        $sourceLen = strlen($canonicalSource);
+
+        $zipFileReal = realpath($zipFile);
+        if ($zipFileReal === false) {
+            $zipDirReal = realpath(dirname($zipFile));
+            $zipFileReal = $zipDirReal ? ($zipDirReal . DIRECTORY_SEPARATOR . basename($zipFile)) : null;
+        }
+
+        $excludedPaths = [];
+        $excludedDirs = [
+            $canonicalSource . DIRECTORY_SEPARATOR . 'pp-media' . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'backup',
+            $canonicalSource . DIRECTORY_SEPARATOR . 'backups',
+            $canonicalSource . DIRECTORY_SEPARATOR . '.git',
+        ];
+
+        foreach ($excludedDirs as $dir) {
+            $real = realpath($dir);
+            if ($real !== false) {
+                $excludedPaths[] = rtrim($real, '/\\') . DIRECTORY_SEPARATOR;
+            } else {
+                $excludedPaths[] = rtrim($dir, '/\\') . DIRECTORY_SEPARATOR;
+            }
+        }
+
+        $zip = new ZipArchive;
+        if ($zip->open($zipFile, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+            return;
+        }
+
+        $flags = RecursiveDirectoryIterator::SKIP_DOTS;
+        $dirIterator = new RecursiveDirectoryIterator($canonicalSource, $flags);
+        $files = new RecursiveIteratorIterator($dirIterator, RecursiveIteratorIterator::SELF_FIRST);
+
+        foreach ($files as $fileInfo) {
+            $filePath = $fileInfo->getRealPath();
+            if ($filePath === false) {
+                continue;
+            }
+
+            if ($zipFileReal !== null && (strtolower($filePath) === strtolower($zipFileReal))) {
+                continue;
+            }
+
+            $isExcluded = false;
+            $fileCheckPath = $fileInfo->isDir() ? (rtrim($filePath, '/\\') . DIRECTORY_SEPARATOR) : $filePath;
+
+            foreach ($excludedPaths as $excludedDir) {
+                if (stripos($fileCheckPath, $excludedDir) === 0) {
+                    $isExcluded = true;
+                    break;
+                }
+            }
+
+            if ($isExcluded) {
+                continue;
+            }
+
+            if (!$fileInfo->isDir()) {
+                $relativePath = ltrim(substr($filePath, $sourceLen), '/\\');
+                $relativePathZip = str_replace('\\', '/', $relativePath);
+                $zip->addFile($filePath, $relativePathZip);
             }
         }
         $zip->close();
@@ -1785,7 +2369,7 @@
             foreach ($stmt as $row) {
                 $vals = [];
                 foreach ($row as $val) {
-                    $vals[] = ($val === null) ? "NULL" : $pdo->quote($val);
+                    $vals[] = ($val === null) ? "NULL" : $pdo->quote((string)$val);
                 }
                 fwrite($fh, "INSERT INTO `$table` VALUES (" . implode(',', $vals) . ");\n");
             }
@@ -1803,17 +2387,51 @@
             throw new Exception("Cannot open ZIP file");
         }
 
+        // Ensure destination directory exists and resolve canonical base path
+        if (!is_dir($destination)) {
+            @mkdir($destination, 0755, true);
+        }
+        $destReal = realpath($destination);
+        if ($destReal === false) {
+            $zip->close();
+            throw new Exception("Invalid destination directory");
+        }
+        $destCanonical = str_replace('\\', '/', $destReal);
+        $destPrefix = rtrim($destCanonical, '/') . '/';
+
         // Detect top-level folder in zip
         $topFolder = '';
         if ($zip->numFiles > 0) {
             $firstFile = $zip->getNameIndex(0);
-            $parts = explode('/', $firstFile);
-            if (count($parts) > 1) $topFolder = $parts[0] . '/';
+            $firstNormalized = str_replace('\\', '/', $firstFile);
+            $parts = explode('/', $firstNormalized);
+            if (count($parts) > 1 && $parts[0] !== '' && $parts[0] !== '.' && $parts[0] !== '..' && !preg_match('/^[a-zA-Z]:$/', $parts[0])) {
+                $topFolder = $parts[0] . '/';
+            }
         }
 
-        // Extract each file manually to remove top-level folder
+        // Extract each file manually after strict path validation
         for ($i = 0; $i < $zip->numFiles; $i++) {
             $entry = $zip->getNameIndex($i);
+
+            // 1. Reject NUL bytes
+            if (str_contains($entry, "\0")) {
+                $zip->close();
+                throw new Exception("Unsafe zip entry path: NUL byte detected");
+            }
+
+            // 2. Reject symlinks if detectable
+            $opsys = 0;
+            $attr = 0;
+            if ($zip->getExternalAttributesIndex($i, $opsys, $attr)) {
+                if ($opsys === ZipArchive::OPSYS_UNIX) {
+                    $mode = ($attr >> 16) & 0170000;
+                    if ($mode === 0120000) { // Symlink S_IFLNK
+                        $zip->close();
+                        throw new Exception("Unsafe zip entry: Symbolic links are not allowed");
+                    }
+                }
+            }
 
             // Remove top folder prefix
             if ($topFolder && str_starts_with($entry, $topFolder)) {
@@ -1822,13 +2440,49 @@
                 $entryNew = $entry;
             }
 
-            if ($entryNew === '') continue; // skip folder itself
+            if ($entryNew === '' || $entryNew === '/') continue; // skip folder itself
 
-            $targetPath = $destination . '/' . $entryNew;
+            // 3. Normalize backslashes
+            $normalizedEntry = str_replace('\\', '/', $entryNew);
 
-            if (substr($entry, -1) === '/') { // folder
+            // 4. Reject absolute paths or Windows drive letters
+            if (str_starts_with($normalizedEntry, '/') || preg_match('/^[a-zA-Z]:/', $normalizedEntry) || str_starts_with($entry, '/')) {
+                $zip->close();
+                throw new Exception("Unsafe zip entry path: Absolute path or drive letter detected");
+            }
+
+            // 5. Inspect path segments for '..' or invalid components
+            $isFolder = (substr($normalizedEntry, -1) === '/');
+            $segments = explode('/', trim($normalizedEntry, '/'));
+            $cleanSegments = [];
+
+            foreach ($segments as $seg) {
+                if ($seg === '' || $seg === '.') {
+                    continue;
+                }
+                if ($seg === '..') {
+                    $zip->close();
+                    throw new Exception("Unsafe zip entry path: Parent directory traversal detected");
+                }
+                $cleanSegments[] = $seg;
+            }
+
+            if (empty($cleanSegments)) {
+                continue;
+            }
+
+            $cleanPath = implode('/', $cleanSegments);
+            $targetPath = $destPrefix . $cleanPath;
+
+            // 6. Ensure targetPath is inside destPrefix
+            if (!str_starts_with($targetPath, $destPrefix)) {
+                $zip->close();
+                throw new Exception("Unsafe zip entry path: Path escapes extraction destination");
+            }
+
+            if ($isFolder) {
                 @mkdir($targetPath, 0755, true);
-            } else { // file
+            } else {
                 @mkdir(dirname($targetPath), 0755, true);
                 copy("zip://$zipFile#$entry", $targetPath);
             }
@@ -1954,12 +2608,14 @@
 
         if ($response_transaciton['status'] === true) {
             if($status == "canceled"){
-                $columns = ['status', 'updated_date'];
-                $values = ['canceled', getCurrentDatetime('Y-m-d H:i:s')];
-                $condition = 'id ="'.$response_transaciton['response'][0]['id'].'"'; 
+                $pdo = connectDatabase();
+                $stmt = $pdo->prepare("UPDATE `{$db_prefix}transaction` SET `status` = 'canceled', `updated_date` = :updated WHERE `ref` = :ref AND `status` = 'initiated'");
+                $stmt->execute([':updated' => getCurrentDatetime('Y-m-d H:i:s'), ':ref' => $transactionid]);
 
-                updateData($db_prefix.'transaction', $columns, $values, $condition);
-                                                                
+                if ($stmt->rowCount() !== 1) {
+                    return false;
+                }
+
                 return true;
             }
 
@@ -2035,11 +2691,40 @@
                     return false;
                 }
 
-                $columns = ['processing_fee', 'discount_amount', 'local_net_amount', 'local_currency', 'gateway_id', 'status', 'trx_id', 'source_info', 'updated_date'];
-                $values = [$totalProcessingFee, $totalDiscount, $convertedAmount, $response_gateway['response'][0]['currency'], $gateway_id, 'completed', $trxid, $final_source_info, getCurrentDatetime('Y-m-d H:i:s')];
-                $condition = 'id ="'.$response_transaciton['response'][0]['id'].'"'; 
+                try {
+                    $pdo = connectDatabase();
+                    $sql = "UPDATE `{$db_prefix}transaction` SET 
+                        `processing_fee` = :processing_fee,
+                        `discount_amount` = :discount_amount,
+                        `local_net_amount` = :local_net_amount,
+                        `local_currency` = :local_currency,
+                        `gateway_id` = :gateway_id,
+                        `status` = 'completed',
+                        `trx_id` = :trx_id,
+                        `source_info` = :source_info,
+                        `updated_date` = :updated_date
+                        WHERE `ref` = :ref AND `status` = 'initiated'";
 
-                updateData($db_prefix.'transaction', $columns, $values, $condition);
+                    $stmt = $pdo->prepare($sql);
+                    $stmt->execute([
+                        ':processing_fee'  => $totalProcessingFee,
+                        ':discount_amount' => $totalDiscount,
+                        ':local_net_amount'=> $convertedAmount,
+                        ':local_currency'  => $response_gateway['response'][0]['currency'],
+                        ':gateway_id'       => $gateway_id,
+                        ':trx_id'          => $trxid,
+                        ':source_info'     => $final_source_info,
+                        ':updated_date'    => getCurrentDatetime('Y-m-d H:i:s'),
+                        ':ref'             => $transactionid,
+                    ]);
+
+                    if ($stmt->rowCount() !== 1) {
+                        return false;
+                    }
+                } catch (PDOException $e) {
+                    error_log("pp_set_transaction_status atomic update failed: " . $e->getMessage());
+                    return false;
+                }
 
                 $params = [ ':ref' => $response_transaciton['response'][0]['ref'], ':status' => 'completed' ];
 

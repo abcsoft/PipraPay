@@ -119,8 +119,8 @@ private string $base_url;
         curl_setopt($url, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($url, CURLOPT_POSTFIELDS, $postToken);
         curl_setopt($url, CURLOPT_FOLLOWLOCATION, 1);
-        curl_setopt($url, CURLOPT_SSL_VERIFYHOST, 0);
-        curl_setopt($url, CURLOPT_SSL_VERIFYPEER, 0);
+        curl_setopt($url, CURLOPT_SSL_VERIFYHOST, 2);
+        curl_setopt($url, CURLOPT_SSL_VERIFYPEER, true);
         $resultData = curl_exec($url);
         $curl_error = curl_error($url);
 
@@ -153,7 +153,8 @@ private string $base_url;
         curl_setopt($ch, CURLOPT_USERAGENT, "Mozilla/0 (Windows; U; Windows NT 0; zh-CN; rv:3)");
         curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1);
         curl_setopt($ch, CURLOPT_HEADER, 0);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
 
         $response = curl_exec($ch);
         if (curl_errno($ch)) {

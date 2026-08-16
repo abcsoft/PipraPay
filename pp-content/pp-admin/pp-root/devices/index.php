@@ -610,13 +610,13 @@
                         }
 
                         html += `
-                            <tr data-id="${item.id}">
+                            <tr data-id="${escapeHtml(item.id)}">
                                 <td><input class="form-check-input m-0 align-middle table-selectable-check rowCheckbox" type="checkbox" aria-label="Select invoice"></td>
-                                <td ${redirectEdit}>${item.name}</td>
-                                <td ${redirectEdit}>${item.model}</td>
-                                <td ${redirectEdit}>${item.android_level}</td>
-                                <td ${redirectEdit}>${item.created_date}</td>
-                                <td ${redirectEdit}>${item.last_sync}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.name)}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.model)}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.android_level)}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.created_date)}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.last_sync)}</td>
                                 <td class="text-end">
                                     <span class="dropdown" style="position: unset;">
                                         <button class="btn dropdown-toggle align-text-top" data-bs-boundary="viewport" data-bs-toggle="dropdown" aria-expanded="false">Actions</button>

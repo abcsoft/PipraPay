@@ -485,10 +485,42 @@
         </div>
     </div>
 </div>
-<!--extra requirement-->
-<!--extra requirement-->
-<!--extra requirement-->
-
+<!-- Modal for One-Time New API Key Display -->
+<div class="modal modal-blur fade" id="modal-createdKeySuccess" tabindex="-1" role="dialog" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">API Key Created</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-warning mb-3" role="alert">
+                    <div class="d-flex">
+                        <div>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon alert-icon me-2"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 9v4" /><path d="M12 16v.01" /><path d="M5 19h14a2 2 0 0 0 1.84 -2.75l-7 -12a2 2 0 0 0 -3.68 0l-7 12a2 2 0 0 0 1.84 2.75" /></svg>
+                        </div>
+                        <div>
+                            <h4 class="alert-title">Important Notice</h4>
+                            <div class="text-secondary">This API key will only be shown once. Copy and store it securely.</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Your New API Key</label>
+                    <div class="input-group">
+                        <input type="text" id="newlyCreatedApiKeyInput" class="form-control" readonly>
+                        <button class="btn btn-primary" type="button" onclick="copyContent(document.getElementById('newlyCreatedApiKeyInput').value, 'Copied!', 'API Key copied successfully.')">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-copy"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666" /><path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1" /></svg> Copy
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary ms-auto" data-bs-dismiss="modal">Done</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <script data-cfasync="false">
     $('.model-bulkAction-btn').click(function () {
@@ -720,17 +752,17 @@
                         if (item.status === 'inactive') badge = 'danger';
 
                         html += `
-                            <tr data-id="${item.id}">
+                            <tr data-id="${escapeHtml(item.id)}">
                                 <td><input class="form-check-input m-0 align-middle table-selectable-check rowCheckbox" type="checkbox" aria-label="Select invoice"></td>
-                                <td ${redirectEdit}>${item.name}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.name)}</td>
                                 <td>
                                     <div class="input-group" style=" max-width: 250px; min-width: 250px; ">
-                                       <input type="text" value="${item.api_key}" class="form-control" readonly>
-                                       <button class="btn btn-icon" type="button" onclick="copyContent('${item.api_key}', 'Copied!', 'Api Key copied successfully.')"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-copy"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666" /><path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1" /></svg></button>
+                                       <input type="text" value="${escapeHtml(item.api_key)}" class="form-control" readonly>
+                                       <button class="btn btn-icon" type="button" onclick="copyContent('${escapeHtml(item.api_key)}', 'Copied!', 'Api Key copied successfully.')"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-copy"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666" /><path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1" /></svg></button>
                                     </div>
                                 </td>
-                                <td ${redirectEdit}>${item.created_date}</td>
-                                <td ${redirectEdit}><span class="badge bg-${badge} me-1"></span> ${item.status.charAt(0).toUpperCase() + item.status.slice(1)}</td>
+                                <td ${redirectEdit}>${escapeHtml(item.created_date)}</td>
+                                <td ${redirectEdit}><span class="badge bg-${badge} me-1"></span> ${escapeHtml(item.status.charAt(0).toUpperCase() + item.status.slice(1))}</td>
                                 <td class="text-end">
                                     <span class="dropdown" style="position: unset;">
                                         <button class="btn dropdown-toggle align-text-top" data-bs-boundary="viewport" data-bs-toggle="dropdown" aria-expanded="false">Actions</button>
@@ -963,13 +995,19 @@
                     });
 
                     if (response.status === 'true') {
-                        createToast({
-                            title: response.title,
-                            description: response.message,
-                            svg: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#5f38f9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-circle-check"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M9 12l2 2l4 -4" /></svg>`,
-                            timeout: 6000,
-                            top: 70
-                        });
+                        if (response.api_key) {
+                            document.getElementById("newlyCreatedApiKeyInput").value = response.api_key;
+                            var createdModal = new bootstrap.Modal(document.getElementById('modal-createdKeySuccess'));
+                            createdModal.show();
+                        } else {
+                            createToast({
+                                title: response.title,
+                                description: response.message,
+                                svg: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#5f38f9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-circle-check"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M9 12l2 2l4 -4" /></svg>`,
+                                timeout: 6000,
+                                top: 70
+                            });
+                        }
 
                         load_data_list(1);
                     } else {

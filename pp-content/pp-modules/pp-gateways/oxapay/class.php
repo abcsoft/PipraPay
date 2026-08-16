@@ -173,60 +173,163 @@
         }
 
         function ipn($data = []){
+            $context = $data;
+
             $postData = file_get_contents('php://input');
-            $data = json_decode($postData, true);
+            $payload = json_decode($postData, true);
 
-            $data_type = $data['type'] ?? '';
+            if (!is_array($payload)) {
+                http_response_code(400);
+                echo 'Invalid payload';
+                exit;
+            }
 
-            if ($data_type === 'invoice') {
-                $apiSecretKey = ($data['gateway']['options']['api_key'] ?? '');
+            $apiSecretKey = $context['options']['api_key'] ?? ($context['gateway']['options']['api_key'] ?? '');
+            if (empty($apiSecretKey) || !is_string($apiSecretKey)) {
+                http_response_code(400);
+                echo 'Merchant API key not configured';
+                exit;
+            }
 
-                $hmacHeader = $_SERVER['HTTP_HMAC'];
-                $calculatedHmac = hash_hmac('sha512', $postData, $apiSecretKey);
+            $receivedHmac = $_SERVER['HTTP_HMAC'] ?? ($_SERVER['HTTP_X_HMAC_SIGNATURE'] ?? '');
+            if (empty($receivedHmac)) {
+                http_response_code(400);
+                echo 'No HMAC signature provided';
+                exit;
+            }
 
-                if ($calculatedHmac === $hmacHeader) {
-                    $url = "https://api.oxapay.com/v1/payment/" . $data['track_id'];
+            $calculatedHmac = hash_hmac('sha512', $postData, $apiSecretKey);
+            if (!hash_equals(strtolower($calculatedHmac), strtolower($receivedHmac))) {
+                http_response_code(400);
+                echo 'Invalid HMAC signature';
+                exit;
+            }
 
-                    $ch = curl_init($url);
-
-                    curl_setopt_array($ch, [
-                        CURLOPT_RETURNTRANSFER => true,
-                        CURLOPT_CUSTOMREQUEST  => "GET",
-                        CURLOPT_HTTPHEADER     => [
-                            "merchant_api_key: ".($data['gateway']['options']['api_key'] ?? ''),
-                            "Content-Type: application/json"
-                        ],
-                    ]);
-
-                    $response = curl_exec($ch);
-
-                    curl_close($ch);
-
-                    $response_de = json_decode($response, true);
-                    
-                    $status = $response_de['data']['status'] ?? '';
-
-                    if($status == "paid"){
-                        $parts = explode('-BP-', $response_de['data']['order_id']);
-                        $order_id = $parts[1] ?? '';
-
-                        $track_id = $response_de['data']['track_id'];
-
-                        pp_set_transaction_status($order_id, 'completed', $data['gateway']['gateway_id'], $track_id);
-                    }
-
-                    http_response_code(200);
-                    echo 'OK';
-                } else {
-                    // HMAC signature is not valid
-                    // Handle the error accordingly
-                    http_response_code(400);
-                    echo 'Invalid HMAC signature';
-                }
-            } else {
+            $data_type = $payload['type'] ?? '';
+            if ($data_type !== 'invoice') {
                 http_response_code(400);
                 echo 'Invalid data.type';
                 exit;
             }
+
+            $track_id = trim((string)($payload['track_id'] ?? ($payload['trackId'] ?? '')));
+            if (empty($track_id)) {
+                http_response_code(400);
+                echo 'Invalid track_id';
+                exit;
+            }
+
+            $url = "https://api.oxapay.com/v1/payment/" . urlencode($track_id);
+
+            $ch = curl_init($url);
+
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_CUSTOMREQUEST  => "GET",
+                CURLOPT_TIMEOUT        => 15,
+                CURLOPT_SSL_VERIFYPEER => true,
+                CURLOPT_SSL_VERIFYHOST => 2,
+                CURLOPT_HTTPHEADER     => [
+                    "merchant_api_key: " . $apiSecretKey,
+                    "Content-Type: application/json"
+                ],
+            ]);
+
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+            curl_close($ch);
+
+            if (empty($response) || $httpCode >= 400) {
+                http_response_code(400);
+                echo 'Failed to verify payment with OxaPay';
+                exit;
+            }
+
+            $response_de = json_decode($response, true);
+            if (!is_array($response_de) || ($response_de['result'] ?? 0) != 100) {
+                http_response_code(400);
+                echo 'OxaPay verification failed';
+                exit;
+            }
+
+            $verified_status = strtolower(trim((string)($response_de['data']['status'] ?? '')));
+            if ($verified_status !== 'paid') {
+                http_response_code(400);
+                echo 'Payment not completed or failed';
+                exit;
+            }
+
+            $verified_track_id = (string)($response_de['data']['track_id'] ?? '');
+            if ($verified_track_id !== '' && $verified_track_id !== $track_id) {
+                http_response_code(400);
+                echo 'Track ID mismatch';
+                exit;
+            }
+
+            $order_id_raw = (string)($response_de['data']['order_id'] ?? '');
+            $parts = explode('-BP-', $order_id_raw);
+            $order_id = end($parts);
+
+            if (empty($order_id)) {
+                http_response_code(400);
+                echo 'Invalid order_id in payment details';
+                exit;
+            }
+
+            global $db_prefix;
+            $params = [':ref' => $order_id];
+            $txResponse = json_decode(getData($db_prefix . 'transaction', 'WHERE ref = :ref', '* FROM', $params), true);
+
+            if (!is_array($txResponse) || !($txResponse['status'] ?? false) || empty($txResponse['response'][0])) {
+                http_response_code(400);
+                echo 'Unknown local order';
+                exit;
+            }
+
+            $localTx = $txResponse['response'][0];
+
+            $trusted_gateway_id = $context['gateway']['gateway_id'] ?? ($context['gateway_id'] ?? '');
+
+            if (!empty($trusted_gateway_id) && !empty($localTx['gateway_id']) && $localTx['gateway_id'] != $trusted_gateway_id) {
+                http_response_code(400);
+                echo 'Transaction gateway mismatch';
+                exit;
+            }
+
+            if (!empty($context['brand_id']) && !empty($localTx['brand_id']) && $localTx['brand_id'] != $context['brand_id']) {
+                http_response_code(400);
+                echo 'Transaction brand mismatch';
+                exit;
+            }
+
+            $expectedAmount = money_sanitize($localTx['amount'] ?? ($localTx['local_net_amount'] ?? '0'));
+            $paidAmount     = money_sanitize($response_de['data']['amount'] ?? '0');
+
+            if (bccomp($paidAmount, $expectedAmount, 8) < 0) {
+                http_response_code(400);
+                echo 'Paid amount is less than expected amount';
+                exit;
+            }
+
+            if (!empty($response_de['data']['currency'])) {
+                $paidCurrency = strtoupper(trim((string)$response_de['data']['currency']));
+                $expectedCurrency = strtoupper(trim((string)($localTx['currency'] ?? ($localTx['local_currency'] ?? ''))));
+                if (!empty($expectedCurrency) && $paidCurrency !== $expectedCurrency) {
+                    http_response_code(400);
+                    echo 'Currency mismatch';
+                    exit;
+                }
+            }
+
+            $statusUpdated = pp_set_transaction_status($order_id, 'completed', $trusted_gateway_id, $track_id);
+            if ($statusUpdated === false) {
+                http_response_code(500);
+                echo 'Failed to update transaction status';
+                exit;
+            }
+
+            http_response_code(200);
+            echo 'OK';
         }
     }
