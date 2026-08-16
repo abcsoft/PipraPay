@@ -285,38 +285,53 @@
 
         $params = [
             ':token' => $tokenEscaped,
-            ':token_hash' => $tokenHash,
-            ':otp_token' => $tokenEscaped
+            ':token_hash' => $tokenHash
         ];
 
-        $response = json_decode(getData($db_prefix.'device', 'WHERE (token = :token OR token_hash = :token_hash OR otp = :otp_token) AND status IN ("used", "active")', '* FROM', $params), true);
-        if (is_array($response) && isset($response['status']) && $response['status'] == true && !empty($response['response'])) {
-            $deviceRow = $response['response'][0];
-            $d_id = $deviceRow['d_id'] ?? '';
-            if (empty($d_id)) {
-                return false;
-            }
+        $response = json_decode(getData($db_prefix.'device', 'WHERE (token = :token OR token_hash = :token_hash) AND status IN ("used", "active")', '* FROM', $params), true);
+        if (!is_array($response) || empty($response['status']) || empty($response['response'])) {
+            return false;
+        }
 
+        $deviceRow = $response['response'][0];
+        $d_id = $deviceRow['d_id'] ?? '';
+        $admin_id = $deviceRow['admin_id'] ?? '';
+
+        $a_id = null;
+
+        // 1. Try browser_log by cookie = d_id (status active)
+        if (!empty($d_id)) {
             $logParams = [ ':cookie' => $d_id, ':status' => 'active' ];
             $responseLog = json_decode(getData($db_prefix.'browser_log', 'WHERE cookie = :cookie AND status = :status', '* FROM', $logParams), true);
-            if (!is_array($responseLog) || empty($responseLog['status']) || empty($responseLog['response'])) {
-                return false;
+            if (is_array($responseLog) && !empty($responseLog['status']) && !empty($responseLog['response'])) {
+                $a_id = $responseLog['response'][0]['a_id'] ?? null;
             }
-
-            $a_id = $responseLog['response'][0]['a_id'] ?? '';
-            if (empty($a_id)) {
-                return false;
-            }
-
-            $adminParams = [ ':a_id' => $a_id, ':status' => 'active' ];
-            $responseAdmin = json_decode(getData($db_prefix.'admin', 'WHERE a_id = :a_id AND status = :status', '* FROM', $adminParams), true);
-            if (!is_array($responseAdmin) || empty($responseAdmin['status']) || empty($responseAdmin['response'])) {
-                return false;
-            }
-
-            return $response;
         }
-        return false;
+
+        // 2. Fallback: check admin_id or d_id directly in admin table
+        if (empty($a_id)) {
+            $targetAid = !empty($admin_id) ? $admin_id : $d_id;
+            if (!empty($targetAid)) {
+                $adminParams = [ ':a_id' => $targetAid, ':status' => 'active' ];
+                $responseAdmin = json_decode(getData($db_prefix.'admin', 'WHERE a_id = :a_id AND status = :status', '* FROM', $adminParams), true);
+                if (is_array($responseAdmin) && !empty($responseAdmin['status']) && !empty($responseAdmin['response'])) {
+                    $a_id = $targetAid;
+                }
+            }
+        }
+
+        if (empty($a_id)) {
+            return false;
+        }
+
+        // 3. Ensure admin account is active (not suspended/disabled)
+        $adminParams = [ ':a_id' => $a_id, ':status' => 'active' ];
+        $responseAdmin = json_decode(getData($db_prefix.'admin', 'WHERE a_id = :a_id AND status = :status', '* FROM', $adminParams), true);
+        if (!is_array($responseAdmin) || empty($responseAdmin['status']) || empty($responseAdmin['response'])) {
+            return false;
+        }
+
+        return $response;
     }
 
     function authenticateDeviceByToken(string $token) {
@@ -814,11 +829,11 @@
         return bcdiv($a, $b, $scale);
     }
 
-    function money_round($amount, int $decimals = 2) {
+    function money_round($amount, int $decimals = 2): string {
         if (!is_numeric($amount)) {
-            $amount = (float) money_sanitize($amount);
+            $amount = (float) money_sanitize((string)$amount);
         }
-        return round((float) $amount, $decimals, PHP_ROUND_HALF_UP);
+        return sprintf('%.' . $decimals . 'f', round((float) $amount, $decimals, PHP_ROUND_HALF_UP));
     }
 
     function mask_api_key($key) {
@@ -3084,8 +3099,8 @@
 
                 $hasNoMax = bccomp($max, '0', 2) <= 0 || $max === '' || $max === '--';
 
-                $isAboveMin = bccomp(money_round($convertedAmount), $min, 2) >= 0;
-                $isBelowMax = $hasNoMax ? true : (bccomp(money_round($convertedAmount), $max, 2) <= 0);
+                $isAboveMin = bccomp(money_sanitize(money_round($convertedAmount)), $min, 2) >= 0;
+                $isBelowMax = $hasNoMax ? true : (bccomp(money_sanitize(money_round($convertedAmount)), $max, 2) <= 0);
 
                 if ($isAboveMin && $isBelowMax) {
                     $gatewayList[] = [
@@ -3172,8 +3187,8 @@
 
             $hasNoMax = bccomp($max, '0', 2) <= 0 || $max === '' || $max === '--';
 
-            $isAboveMin = bccomp(money_round($convertedAmount), $min, 2) >= 0;
-            $isBelowMax = $hasNoMax ? true : (bccomp(money_round($convertedAmount), $max, 2) <= 0);
+            $isAboveMin = bccomp(money_sanitize(money_round($convertedAmount)), $min, 2) >= 0;
+            $isBelowMax = $hasNoMax ? true : (bccomp(money_sanitize(money_round($convertedAmount)), $max, 2) <= 0);
 
             if ($isAboveMin && $isBelowMax) {
                 if(file_exists(__DIR__.'/../pp-modules/pp-gateways/'.$response_gateway['response'][0]['slug'].'/class.php')){

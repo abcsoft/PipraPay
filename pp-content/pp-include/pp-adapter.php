@@ -9440,6 +9440,28 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                     exit();
                                 }
 
+                                $checkRowRes = json_decode(getData($db_prefix.'device', 'WHERE id = :id', '* FROM', [':id' => $deviceRow['id']]), true);
+                                if (!is_array($checkRowRes) || empty($checkRowRes['status']) || empty($checkRowRes['response'])) {
+                                    error_log("[Companion API Log] Method: {$reqMethod} | URI: {$reqUri} | Action: login | Status: ROW_VERIFY_FAILED | IP: {$clientIp}");
+                                    echo json_encode([
+                                        'status' => "false",
+                                        'title' => 'Pairing Failed',
+                                        'message' => 'The device could not be paired. Please contact the administrator.'
+                                    ]);
+                                    exit();
+                                }
+
+                                $updatedRow = $checkRowRes['response'][0];
+                                if (!hash_equals($token_hash, (string)($updatedRow['token_hash'] ?? ''))) {
+                                    error_log("[Companion API Log] Method: {$reqMethod} | URI: {$reqUri} | Action: login | Status: TOKEN_HASH_MISMATCH | IP: {$clientIp}");
+                                    echo json_encode([
+                                        'status' => "false",
+                                        'title' => 'Pairing Failed',
+                                        'message' => 'The device could not be paired. Please contact the administrator.'
+                                    ]);
+                                    exit();
+                                }
+
                                 $authCheck = authenticateDeviceByToken($token_new);
                                 if ($authCheck === false || empty($authCheck['status']) || empty($authCheck['response'])) {
                                     error_log("[Companion API Log] Method: {$reqMethod} | URI: {$reqUri} | Action: login | Status: AUTH_CHECK_FAILED | IP: {$clientIp}");
