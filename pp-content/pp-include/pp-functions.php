@@ -609,7 +609,7 @@
             foreach ($tableCols as $col) {
                 $colName = $col['Field'];
 
-                if (strpos(strtolower($col['Extra']), 'auto_increment') !== false && !isset($userData[$colName])) {
+                if ((strpos(strtolower($col['Extra']), 'auto_increment') !== false || strpos(strtolower($col['Extra']), 'generated') !== false) && !isset($userData[$colName])) {
                     continue;
                 }
 
