@@ -144,6 +144,18 @@
             if (!in_array('otp_expires_at', $columns)) {
                 $pdo->exec("ALTER TABLE `{$tableName}` ADD COLUMN `otp_expires_at` varchar(20) NULL AFTER `token_hash`");
             }
+            if (!in_array('admin_id', $columns)) {
+                $pdo->exec("ALTER TABLE `{$tableName}` ADD COLUMN `admin_id` varchar(40) NULL");
+            }
+            if (!in_array('brand_id', $columns)) {
+                $pdo->exec("ALTER TABLE `{$tableName}` ADD COLUMN `brand_id` varchar(40) NULL");
+            }
+            if (!in_array('paired_at', $columns)) {
+                $pdo->exec("ALTER TABLE `{$tableName}` ADD COLUMN `paired_at` varchar(30) NULL");
+            }
+            if (!in_array('revoked_at', $columns)) {
+                $pdo->exec("ALTER TABLE `{$tableName}` ADD COLUMN `revoked_at` varchar(30) NULL");
+            }
             $migrated = true;
         } catch (Throwable $e) {
             // Silently catch
@@ -274,11 +286,10 @@
         $params = [
             ':token' => $tokenEscaped,
             ':token_hash' => $tokenHash,
-            ':otp_token' => $tokenEscaped,
-            ':status' => 'used'
+            ':otp_token' => $tokenEscaped
         ];
 
-        $response = json_decode(getData($db_prefix.'device', 'WHERE (token = :token OR token_hash = :token_hash OR otp = :otp_token) AND status = :status', '* FROM', $params), true);
+        $response = json_decode(getData($db_prefix.'device', 'WHERE (token = :token OR token_hash = :token_hash OR otp = :otp_token) AND status IN ("used", "active")', '* FROM', $params), true);
         if (is_array($response) && isset($response['status']) && $response['status'] == true && !empty($response['response'])) {
             $deviceRow = $response['response'][0];
             $d_id = $deviceRow['d_id'] ?? '';
@@ -306,6 +317,10 @@
             return $response;
         }
         return false;
+    }
+
+    function authenticateDeviceByToken(string $token) {
+        return authenticateCompanionDeviceToken($token);
     }
 
     function getAdminPath($url) {
@@ -345,20 +360,28 @@
     function connectDatabase() {
         global $db_host, $db_port, $db_user, $db_pass, $db_name;
         $db_port = $db_port ?? 3306; // fallback
+        $hostToUse = !empty($db_host) ? $db_host : '127.0.0.1';
 
-    try {
-            // Build DSN
-            $dsn = "mysql:host=$db_host;port=$db_port;dbname=$db_name;charset=utf8mb4";
-
-            // Create PDO instance
-            $pdo = new PDO($dsn, $db_user, $db_pass, [
-                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,      // Throw exceptions on error
-                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC, // Fetch associative arrays
-                PDO::ATTR_EMULATE_PREPARES => false               // Use native prepared statements
+        try {
+            $dsn = "mysql:host={$hostToUse};port={$db_port};dbname={$db_name};charset=utf8mb4";
+            return new PDO($dsn, $db_user, $db_pass, [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_EMULATE_PREPARES => false
             ]);
-
-            return $pdo;
         } catch (PDOException $e) {
+            if ($hostToUse === '127.0.0.1') {
+                try {
+                    $dsn = "mysql:host=localhost;port={$db_port};dbname={$db_name};charset=utf8mb4";
+                    return new PDO($dsn, $db_user, $db_pass, [
+                        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                        PDO::ATTR_EMULATE_PREPARES => false
+                    ]);
+                } catch (PDOException $e2) {
+                    // Fallthrough
+                }
+            }
             error_log('Database connection error: ' . $e->getMessage());
             http_response_code(500);
             die('Database connection failed.');

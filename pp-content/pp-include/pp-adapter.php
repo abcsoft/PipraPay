@@ -9420,13 +9420,36 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             } else {
                                 $token_new = bin2hex(random_bytes(32));
                                 $token_hash = hash('sha256', $token_new);
+                                $paired_at = getCurrentDatetime('Y-m-d H:i:s');
 
-                                $columns = ['otp', 'token', 'token_hash', 'name', 'model', 'android_level', 'app_version', 'status', 'updated_date'];
-                                $values = ['', $token_new, $token_hash, $name, $model, $android_level, $app_version, 'used', getCurrentDatetime('Y-m-d H:i:s')];
+                                $columns = ['otp', 'token', 'token_hash', 'name', 'model', 'android_level', 'app_version', 'status', 'updated_date', 'paired_at'];
+                                $values = ['', $token_new, $token_hash, $name, $model, $android_level, $app_version, 'used', $paired_at, $paired_at];
 
-                                $condition = "id = '".$deviceRow['id']."'"; 
+                                $condition = "id = :id"; 
+                                $conditionParams = [':id' => $deviceRow['id']];
                                 
-                                updateData($db_prefix.'device', $columns, $values, $condition);
+                                $updateRes = updateData($db_prefix.'device', $columns, $values, $condition, $conditionParams);
+
+                                if ($updateRes === false) {
+                                    error_log("[Companion API Log] Method: {$reqMethod} | URI: {$reqUri} | Action: login | Status: UPDATE_FAILED | IP: {$clientIp}");
+                                    echo json_encode([
+                                        'status' => "false",
+                                        'title' => 'Pairing Failed',
+                                        'message' => 'The device could not be paired. Please contact the administrator.'
+                                    ]);
+                                    exit();
+                                }
+
+                                $authCheck = authenticateDeviceByToken($token_new);
+                                if ($authCheck === false || empty($authCheck['status']) || empty($authCheck['response'])) {
+                                    error_log("[Companion API Log] Method: {$reqMethod} | URI: {$reqUri} | Action: login | Status: AUTH_CHECK_FAILED | IP: {$clientIp}");
+                                    echo json_encode([
+                                        'status' => "false",
+                                        'title' => 'Pairing Failed',
+                                        'message' => 'The device could not be paired. Please contact the administrator.'
+                                    ]);
+                                    exit();
+                                }
 
                                 error_log("[Companion API Log] Method: {$reqMethod} | URI: {$reqUri} | Action: login | Status: SUCCESS_PAIRED | IP: {$clientIp}");
 

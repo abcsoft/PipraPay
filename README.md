@@ -140,6 +140,29 @@ This app acts as a secure companion tool for PipraPay payment verification and a
 - Configure gateways  
 - Use webhooks & automation  
 
+## 🚀 Database Migrations & Deployment
+
+To execute database schema updates during deployment (e.g., Coolify, CI/CD pipelines, or deployment scripts):
+
+Run the migration command from the project root directory before launching web services:
+
+```bash
+php migrate.php
+```
+
+### Coolify Pre-Deployment Configuration
+Configure the **Pre-Deploy Command** (or Build / Deployment Hook) in your deployment settings:
+
+```bash
+php migrate.php
+```
+
+### Deployment Failure & Idempotency Rules:
+- **Automatic Execution**: `php migrate.php` applies all pending `.sql` migrations in `pp-content/pp-migrations/`.
+- **Idempotent Skipping**: Previously applied migrations recorded in `{db_prefix}migrations` are safely skipped (`[SKIP]`).
+- **Failure Protection**: If any migration statement fails, `migrate.php` outputs the database error to `STDERR` and exits with status code `1`, halting application startup immediately.
+- **Recovery**: Once the invalid migration is fixed and pushed, the next deployment automatically resumes and applies it (`[RUN]` -> `[OK]`).
+
 ## 🤝 Contributing
 
 PipraPay is a community-first and developer-driven ecosystem.

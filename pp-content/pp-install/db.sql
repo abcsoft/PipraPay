@@ -210,11 +210,18 @@ CREATE TABLE `pp_device` (
   `d_id` varchar(40) NOT NULL,
   `device_id` varchar(15) NOT NULL,
   `otp` varchar(15) NOT NULL,
-  `name` text NULL,
-  `model` text NULL,
-  `android_level` text NULL,
-  `app_version` text NULL,
-  `status` enum('processing','used') NOT NULL DEFAULT 'processing',
+  `token` text DEFAULT NULL,
+  `token_hash` varchar(64) DEFAULT NULL,
+  `otp_expires_at` varchar(20) DEFAULT NULL,
+  `admin_id` varchar(40) DEFAULT NULL,
+  `brand_id` varchar(40) DEFAULT NULL,
+  `paired_at` varchar(30) DEFAULT NULL,
+  `revoked_at` varchar(30) DEFAULT NULL,
+  `name` text DEFAULT NULL,
+  `model` text DEFAULT NULL,
+  `android_level` text DEFAULT NULL,
+  `app_version` text DEFAULT NULL,
+  `status` varchar(20) NOT NULL DEFAULT 'processing',
   `created_date` varchar(20) NOT NULL,
   `updated_date` varchar(20) NOT NULL,
   `last_sync` varchar(20) NOT NULL DEFAULT '--'
@@ -575,7 +582,9 @@ ALTER TABLE `pp_device`
   ADD KEY `created_date` (`created_date`,`updated_date`),
   ADD KEY `a_id` (`d_id`),
   ADD KEY `otp` (`otp`),
-  ADD KEY `status` (`status`);
+  ADD KEY `status` (`status`),
+  ADD KEY `token_hash` (`token_hash`,`status`),
+  ADD KEY `admin_brand` (`admin_id`,`brand_id`);
 
 --
 -- Indexes for table `pp_domain`
