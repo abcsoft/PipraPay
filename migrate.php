@@ -53,20 +53,29 @@ try {
     exit(1);
 }
 
-$migrationsDir = __DIR__ . '/pp-content/pp-migrations';
-if (!is_dir($migrationsDir)) {
-    @mkdir($migrationsDir, 0755, true);
+$migrationsDir1 = __DIR__ . '/pp-content/pp-migrations';
+$migrationsDir2 = __DIR__ . '/pp-content/pp-install/migrations';
+
+if (!is_dir($migrationsDir1)) {
+    @mkdir($migrationsDir1, 0755, true);
 }
 
 $stmt = $pdo->query("SELECT `migration` FROM `{$trackingTable}`");
 $applied = $stmt ? $stmt->fetchAll(PDO::FETCH_COLUMN) : [];
 $appliedMap = array_flip($applied);
 
-$files = glob($migrationsDir . '/*.sql');
-if ($files === false) {
-    $files = [];
+$files1 = glob($migrationsDir1 . '/*.sql') ?: [];
+$files2 = is_dir($migrationsDir2) ? (glob($migrationsDir2 . '/*.sql') ?: []) : [];
+
+$allFilesMap = [];
+foreach (array_merge($files1, $files2) as $f) {
+    $bn = basename($f);
+    if (!isset($allFilesMap[$bn])) {
+        $allFilesMap[$bn] = $f;
+    }
 }
-sort($files, SORT_STRING);
+ksort($allFilesMap, SORT_STRING);
+$files = array_values($allFilesMap);
 
 function parseSqlStatements(string $sql, string $prefix): array {
     $sql = str_replace('{PREFIX}', $prefix, $sql);
