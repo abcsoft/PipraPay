@@ -87,32 +87,40 @@
         }
 
         global $site_url;
+        $baseUrlCandidate = '';
         if (!empty($site_url)) {
-            $normalizedUrl = rtrim($site_url, '/') . '/';
-            $host = parse_url($normalizedUrl, PHP_URL_HOST);
-            return [
-                'url' => $normalizedUrl,
-                'is_localhost' => isLoopbackHost($host)
-            ];
+            $baseUrlCandidate = rtrim($site_url, '/') . '/';
+        } else {
+            $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') 
+                        || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443)
+                        || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower($_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https');
+            $protocol = $isHttps ? "https://" : "http://";
+            $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+            $rawDir = dirname($_SERVER['SCRIPT_NAME'] ?? '');
+            $scriptDir = ($rawDir === '.' || $rawDir === '/' || $rawDir === '\\') ? '' : trim($rawDir, '/\\.');
+            $path = !empty($scriptDir) ? '/' . $scriptDir : '';
+            
+            if (preg_match('#/admin$#i', $path)) {
+                $path = preg_replace('#/admin$#i', '', $path);
+            }
+
+            $baseUrlCandidate = rtrim($protocol . $host . $path, '/') . '/';
         }
 
-        $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') 
-                    || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443)
-                    || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower($_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https');
-        $protocol = $isHttps ? "https://" : "http://";
-        $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
-        $scriptDir = trim(dirname($_SERVER['SCRIPT_NAME'] ?? ''), '/\\');
-        $path = !empty($scriptDir) ? '/' . $scriptDir : '';
-        
-        if (preg_match('#/admin$#i', $path)) {
-            $path = preg_replace('#/admin$#i', '', $path);
+        $parsedHost = parse_url($baseUrlCandidate, PHP_URL_HOST);
+        if (isLoopbackHost($parsedHost)) {
+            $hostname = gethostname();
+            if (!empty($hostname)) {
+                $lanIp = gethostbyname($hostname);
+                if (!empty($lanIp) && !isLoopbackHost($lanIp) && filter_var($lanIp, FILTER_VALIDATE_IP)) {
+                    $baseUrlCandidate = preg_replace('#://[^/:]+#', '://' . $lanIp, $baseUrlCandidate);
+                    $parsedHost = $lanIp;
+                }
+            }
         }
-
-        $normalizedUrl = rtrim($protocol . $host . $path, '/') . '/';
-        $parsedHost = parse_url($normalizedUrl, PHP_URL_HOST);
 
         return [
-            'url' => $normalizedUrl,
+            'url' => $baseUrlCandidate,
             'is_localhost' => isLoopbackHost($parsedHost)
         ];
     }
