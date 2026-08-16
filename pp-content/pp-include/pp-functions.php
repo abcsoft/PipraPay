@@ -299,46 +299,8 @@
             ':token_hash' => $tokenHash
         ];
 
-        $response = json_decode(getData($db_prefix.'device', 'WHERE (token = :token OR token_hash = :token_hash) AND status IN ("used", "active")', '* FROM', $params), true);
+        $response = json_decode(getData($db_prefix.'device', 'WHERE (token_hash = :token_hash OR token = :token) AND status IN ("used", "active")', '* FROM', $params), true);
         if (!is_array($response) || empty($response['status']) || empty($response['response'])) {
-            return false;
-        }
-
-        $deviceRow = $response['response'][0];
-        $d_id = $deviceRow['d_id'] ?? '';
-        $admin_id = $deviceRow['admin_id'] ?? '';
-
-        $a_id = null;
-
-        // 1. Try browser_log by cookie = d_id (status active)
-        if (!empty($d_id)) {
-            $logParams = [ ':cookie' => $d_id, ':status' => 'active' ];
-            $responseLog = json_decode(getData($db_prefix.'browser_log', 'WHERE cookie = :cookie AND status = :status', '* FROM', $logParams), true);
-            if (is_array($responseLog) && !empty($responseLog['status']) && !empty($responseLog['response'])) {
-                $a_id = $responseLog['response'][0]['a_id'] ?? null;
-            }
-        }
-
-        // 2. Fallback: check admin_id or d_id directly in admin table
-        if (empty($a_id)) {
-            $targetAid = !empty($admin_id) ? $admin_id : $d_id;
-            if (!empty($targetAid)) {
-                $adminParams = [ ':a_id' => $targetAid, ':status' => 'active' ];
-                $responseAdmin = json_decode(getData($db_prefix.'admin', 'WHERE a_id = :a_id AND status = :status', '* FROM', $adminParams), true);
-                if (is_array($responseAdmin) && !empty($responseAdmin['status']) && !empty($responseAdmin['response'])) {
-                    $a_id = $targetAid;
-                }
-            }
-        }
-
-        if (empty($a_id)) {
-            return false;
-        }
-
-        // 3. Ensure admin account is active (not suspended/disabled)
-        $adminParams = [ ':a_id' => $a_id, ':status' => 'active' ];
-        $responseAdmin = json_decode(getData($db_prefix.'admin', 'WHERE a_id = :a_id AND status = :status', '* FROM', $adminParams), true);
-        if (!is_array($responseAdmin) || empty($responseAdmin['status']) || empty($responseAdmin['response'])) {
             return false;
         }
 
