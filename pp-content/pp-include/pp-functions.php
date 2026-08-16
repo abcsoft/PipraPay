@@ -164,6 +164,9 @@
             if (!in_array('revoked_at', $columns)) {
                 $pdo->exec("ALTER TABLE `{$tableName}` ADD COLUMN `revoked_at` varchar(30) NULL");
             }
+            if (!in_array('last_seen_at', $columns)) {
+                $pdo->exec("ALTER TABLE `{$tableName}` ADD COLUMN `last_seen_at` varchar(20) NULL AFTER `last_sync`");
+            }
             $migrated = true;
         } catch (Throwable $e) {
             // Silently catch
