@@ -6451,6 +6451,15 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                                         insertData($db_prefix.'sms_data', $columns, $values);
 
+                                        if (strtolower($type) === 'personal' && !empty($phone_number) && !empty($transaction_id) && !empty($amount)) {
+                                            $smsId = null;
+                                            $smsChk = json_decode(getData($db_prefix.'sms_data', 'WHERE sender_key = :sender_key AND trx_id = :trx_id ORDER BY id DESC LIMIT 1', 'id FROM', [':sender_key' => $sender_key, ':trx_id' => $transaction_id]), true);
+                                            if (!empty($smsChk['response'][0]['id'])) {
+                                                $smsId = (int)$smsChk['response'][0]['id'];
+                                            }
+                                            pp_match_and_complete_personal_payment($sender_key, $phone_number, $amount, $transaction_id, $smsId, null);
+                                        }
+
                                         echo json_encode(['status' => 'true', 'title' => 'SMS Data Created', 'message' => 'The sms data has been created successfully.'.$amount, 'csrf_token' => $new_csrf_token]);
                                     }else{
                                         echo json_encode(['status' => 'false', 'title' => 'Duplicate Transaction', 'message' => 'The provided Transaction ID already exists in our system.', 'csrf_token' => $new_csrf_token]); 
@@ -6487,6 +6496,15 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                     $values = [$device, $sender_key, $phone_number, money_sanitize($amount), $currency, $transaction_id, money_sanitize($balance), $type, $entry_type, $status, $message, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
 
                                     insertData($db_prefix.'sms_data', $columns, $values);
+
+                                    if (strtolower($type) === 'personal' && !empty($phone_number) && !empty($transaction_id) && !empty($amount)) {
+                                        $smsId = null;
+                                        $smsChk = json_decode(getData($db_prefix.'sms_data', 'WHERE sender_key = :sender_key AND trx_id = :trx_id ORDER BY id DESC LIMIT 1', 'id FROM', [':sender_key' => $sender_key, ':trx_id' => $transaction_id]), true);
+                                        if (!empty($smsChk['response'][0]['id'])) {
+                                            $smsId = (int)$smsChk['response'][0]['id'];
+                                        }
+                                        pp_match_and_complete_personal_payment($sender_key, $phone_number, $amount, $transaction_id, $smsId, null);
+                                    }
 
                                     echo json_encode(['status' => 'true', 'title' => 'SMS Data Created', 'message' => 'The sms data has been created successfully.', 'csrf_token' => $new_csrf_token]);
                                 }else{
@@ -9380,6 +9398,61 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         }
                     }
             }
+
+            if($action == "custom-personal-payment-start"){
+                $gateway_id = escape_string($_POST['gateway-id'] ?? $_POST['gateway_id'] ?? '');
+                $transaction_id = trim(escape_string($_POST['transaction-id'] ?? $_POST['ref'] ?? ''));
+                $payer_number = trim(escape_string($_POST['payer_number'] ?? $_POST['mobile_number'] ?? ''));
+                $category = trim(escape_string($_POST['category'] ?? 'mobile_banking'));
+
+                if(empty($gateway_id) || empty($transaction_id) || empty($payer_number)){
+                    echo json_encode(['status' => "false", 'title' => 'Incomplete Information', 'message' => 'Please fill in all required fields before proceeding.']);
+                    exit();
+                }
+
+                $params = [ ':ref' => $transaction_id, ':status' => 'initiated' ];
+                $response_transaction = json_decode(getData($db_prefix.'transaction','WHERE ref = :ref AND status = :status ', '* FROM', $params),true);
+                if(empty($response_transaction['status']) || empty($response_transaction['response'])){
+                    echo json_encode(['status' => "false", 'title' => 'Transaction Not Found', 'message' => 'Transaction not found or is no longer initiated.']);
+                    exit();
+                }
+                $txRow = $response_transaction['response'][0];
+                $brandId = $txRow['brand_id'];
+
+                $gatewayInfo = pp_gateway_info($gateway_id, ['brand' => ['id' => $brandId]]);
+                $personalMeta = pp_is_personal_mobile_banking_gateway($gatewayInfo);
+                if(!$personalMeta){
+                    echo json_encode(['status' => "false", 'title' => 'Invalid Gateway', 'message' => 'The selected gateway does not support automated Personal verification.']);
+                    exit();
+                }
+
+                $normalizedNumber = pp_normalize_bd_mobile_number($payer_number);
+                if(empty($normalizedNumber)){
+                    echo json_encode(['status' => "false", 'title' => 'Invalid Mobile Number', 'message' => 'Please enter a valid 11-digit Bangladesh mobile number (e.g. 017XXXXXXXX).']);
+                    exit();
+                }
+
+                $sessRes = pp_create_or_update_personal_payment_session($transaction_id, $gateway_id, $normalizedNumber, $brandId);
+                if(($sessRes['status'] ?? '') === 'true'){
+                    $waitingUrl = pp_checkout_address($transaction_id) . '?gateway=' . urlencode($gateway_id) . '&category=' . urlencode($category) . '&step=waiting';
+                    echo json_encode([
+                        'status'       => 'true',
+                        'title'        => 'Session Started',
+                        'message'      => 'Personal payment session initialized successfully.',
+                        'session_id'   => $sessRes['session_id'],
+                        'expires_in'   => $sessRes['expires_in'],
+                        'payer_number' => $sessRes['payer_number'],
+                        'redirect_url' => $waitingUrl
+                    ]);
+                }else{
+                    echo json_encode([
+                        'status'  => 'false',
+                        'title'   => 'Session Failed',
+                        'message' => $sessRes['message'] ?? 'Unable to initialize waiting session.'
+                    ]);
+                }
+                exit();
+            }
         }
         exit();
     }
@@ -9767,6 +9840,17 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                     $values = ['app', $device_id, $id, $sender, $sender_key, $simslot, $phone_number, money_sanitize($amount), $currency, $transaction_id, money_sanitize($balance), $type, $status, $message, $reason, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
                                     insertData($db_prefix.'sms_data', $columns, $values);
 
+                                    $smsId = null;
+                                    $smsChk = json_decode(getData($db_prefix.'sms_data', 'WHERE sender_key = :sender_key AND trx_id = :trx_id ORDER BY id DESC LIMIT 1', 'id FROM', [':sender_key' => $sender_key, ':trx_id' => $transaction_id]), true);
+                                    if (!empty($smsChk['response'][0]['id'])) {
+                                        $smsId = (int)$smsChk['response'][0]['id'];
+                                    }
+
+                                    if (strtolower($type) === 'personal' && !empty($phone_number) && !empty($transaction_id) && !empty($amount)) {
+                                        $brandIdToMatch = !empty($deviceRow['brand_id']) && $deviceRow['brand_id'] !== '--' ? $deviceRow['brand_id'] : null;
+                                        pp_match_and_complete_personal_payment($sender_key, $phone_number, $amount, $transaction_id, $smsId, $brandIdToMatch);
+                                    }
+
                                     $results[] = ['id' => $id, 'status' => 'accepted'];
                                 }else{
                                     $params = [ ':device_id' => $device_id, ':sender_key' => $sender_key, ':type' => $type ];
@@ -9807,6 +9891,16 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                     $columns = ['source', 'device_id', 'client_message_id', 'sender', 'sender_key', 'simslot', 'number', 'amount', 'currency', 'trx_id', 'balance', 'type', 'status', 'message', 'reason', 'created_date', 'updated_date'];
                                     $values = ['app', $device_id, $id, $sender, $sender_key, $simslot, $phone_number, money_sanitize($amount), $currency, $transaction_id, money_sanitize($balance), $type, $status, $message, $reason, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
                                     insertData($db_prefix.'sms_data', $columns, $values);
+
+                                    if ($status === 'approved' && strtolower($type) === 'personal' && !empty($phone_number) && !empty($transaction_id) && !empty($amount)) {
+                                        $smsId = null;
+                                        $smsChk = json_decode(getData($db_prefix.'sms_data', 'WHERE sender_key = :sender_key AND trx_id = :trx_id ORDER BY id DESC LIMIT 1', 'id FROM', [':sender_key' => $sender_key, ':trx_id' => $transaction_id]), true);
+                                        if (!empty($smsChk['response'][0]['id'])) {
+                                            $smsId = (int)$smsChk['response'][0]['id'];
+                                        }
+                                        $brandIdToMatch = !empty($deviceRow['brand_id']) && $deviceRow['brand_id'] !== '--' ? $deviceRow['brand_id'] : null;
+                                        pp_match_and_complete_personal_payment($sender_key, $phone_number, $amount, $transaction_id, $smsId, $brandIdToMatch);
+                                    }
 
                                     $results[] = ['id' => $id, 'status' => ($status === 'error') ? 'error' : 'accepted'];
                                 }

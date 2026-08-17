@@ -47,6 +47,27 @@
         return;
     }
 
+    // Handle AJAX session creation & polling requests
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'create_personal_session') {
+        header('Content-Type: application/json; charset=utf-8');
+        $payerNumber = trim((string)($_POST['payer_number'] ?? ''));
+        $gatewayId = trim((string)($_GET['gateway'] ?? ''));
+        $txRef = trim((string)($data['transaction']['ref'] ?? ''));
+        $brandId = trim((string)($data['brand']['id'] ?? ''));
+
+        $res = pp_create_or_update_personal_payment_session($txRef, $gatewayId, $payerNumber, $brandId);
+        echo json_encode($res);
+        exit();
+    }
+
+    if (isset($_GET['action']) && $_GET['action'] === 'check_session_status') {
+        header('Content-Type: application/json; charset=utf-8');
+        $txRef = trim((string)($data['transaction']['ref'] ?? ''));
+        $res = pp_get_personal_payment_session_status($txRef);
+        echo json_encode($res);
+        exit();
+    }
+
     // Extract gateway parameters from DB
     global $db_prefix;
     $gatewayOptions = [];
@@ -132,6 +153,11 @@
     $chargeAmount = money_round($data['transaction']['processing_fee'] ?? 0, 2);
     $ref = htmlspecialchars($data['transaction']['ref'] ?? '');
     $companyName = htmlspecialchars($data['brand']['name'] ?? 'Your Company Name');
+
+    // Detect if an active waiting session exists or if step=waiting requested
+    $activeSess = function_exists('pp_get_personal_payment_session_status') ? pp_get_personal_payment_session_status($ref) : ['status' => 'none'];
+    $isWaiting = (($activeSess['status'] ?? '') === 'waiting') || (isset($_GET['step']) && $_GET['step'] === 'waiting');
+    $initialExpiresIn = ($isWaiting && !empty($activeSess['expires_in'])) ? (int)$activeSess['expires_in'] : 300;
 ?>
 
 <!DOCTYPE html>
@@ -173,7 +199,7 @@
                      NAGAD PERSONAL REFERENCE LAYOUT
                      ======================================================== -->
                 <!-- SCREEN 1: Nagad Account Number Screen -->
-                <div id="stepPayerNumber" style="display: block;">
+                <div id="stepPayerNumber" style="<?php echo $isWaiting ? 'display: none;' : 'display: block;'; ?>">
                     <!-- Centered Cart Icon & Company Name -->
                     <div class="nagad-top-header">
                         <svg class="nagad-cart-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M6 19m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M17 19m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M17 17h-11v-14h-2" /><path d="M6 5l14 1l-1 7h-13" /></svg>
@@ -196,49 +222,56 @@
                         </div>
                     </div>
 
-                    <!-- Section Title -->
-                    <div class="nagad-account-title"><?php echo $accountLabel; ?></div>
+                    <form class="personal-payment-form" id="formNagadPayment" method="POST" action="" onsubmit="return handlePaymentSubmit(event, 'nagad')">
+                        <input type="hidden" name="action-v2" value="custom-personal-payment-start">
+                        <input type="hidden" name="gateway-id" value="<?php echo htmlspecialchars($_GET['gateway']); ?>">
+                        <input type="hidden" name="transaction-id" value="<?php echo htmlspecialchars($data['transaction']['ref']); ?>">
+                        <input type="hidden" name="category" value="<?php echo htmlspecialchars($currentCategory); ?>">
 
-                    <!-- Segmented 11-digit Number Input -->
-                    <div class="nagad-input-container" onclick="focusNagadInput()">
-                        <input type="tel" id="nagadHiddenInput" class="nagad-hidden-input" maxlength="11" autocomplete="tel" oninput="onNagadInput(this.value)">
-                        <div class="nagad-digit-group-wrap">
-                            <div class="nagad-digit-group">
-                                <div class="nagad-digit-box active" id="ndb-0"></div>
-                                <div class="nagad-digit-box" id="ndb-1"></div>
-                                <div class="nagad-digit-box" id="ndb-2"></div>
-                            </div>
-                            <div class="nagad-digit-dash">-</div>
-                            <div class="nagad-digit-group">
-                                <div class="nagad-digit-box" id="ndb-3"></div>
-                                <div class="nagad-digit-box" id="ndb-4"></div>
-                                <div class="nagad-digit-box" id="ndb-5"></div>
-                                <div class="nagad-digit-box" id="ndb-6"></div>
-                            </div>
-                            <div class="nagad-digit-dash">-</div>
-                            <div class="nagad-digit-group">
-                                <div class="nagad-digit-box" id="ndb-7"></div>
-                                <div class="nagad-digit-box" id="ndb-8"></div>
-                                <div class="nagad-digit-box" id="ndb-9"></div>
-                                <div class="nagad-digit-box" id="ndb-10"></div>
+                        <!-- Section Title -->
+                        <div class="nagad-account-title"><?php echo $accountLabel; ?></div>
+
+                        <!-- Segmented 11-digit Number Input -->
+                        <div class="nagad-input-container" onclick="focusNagadInput()">
+                            <input type="tel" id="nagadHiddenInput" name="payer_number" class="nagad-hidden-input" maxlength="11" autocomplete="tel" oninput="onNagadInput(this.value)">
+                            <div class="nagad-digit-group-wrap">
+                                <div class="nagad-digit-group">
+                                    <div class="nagad-digit-box active" id="ndb-0"></div>
+                                    <div class="nagad-digit-box" id="ndb-1"></div>
+                                    <div class="nagad-digit-box" id="ndb-2"></div>
+                                </div>
+                                <div class="nagad-digit-dash">-</div>
+                                <div class="nagad-digit-group">
+                                    <div class="nagad-digit-box" id="ndb-3"></div>
+                                    <div class="nagad-digit-box" id="ndb-4"></div>
+                                    <div class="nagad-digit-box" id="ndb-5"></div>
+                                    <div class="nagad-digit-box" id="ndb-6"></div>
+                                </div>
+                                <div class="nagad-digit-dash">-</div>
+                                <div class="nagad-digit-group">
+                                    <div class="nagad-digit-box" id="ndb-7"></div>
+                                    <div class="nagad-digit-box" id="ndb-8"></div>
+                                    <div class="nagad-digit-box" id="ndb-9"></div>
+                                    <div class="nagad-digit-box" id="ndb-10"></div>
+                                </div>
                             </div>
                         </div>
-                    </div>
 
-                    <!-- Terms & Conditions Notice -->
-                    <div class="nagad-terms-text">
-                        By clicking/tapping "Proceed" you are agreeing to our <u>Terms and Conditions</u>
-                    </div>
+                        <!-- Terms & Conditions Notice -->
+                        <div class="nagad-terms-text">
+                            By clicking/tapping "Proceed" you are agreeing to our <u>Terms and Conditions</u>
+                        </div>
 
-                    <!-- Action Buttons -->
-                    <div class="nagad-actions-row">
-                        <button type="button" id="btnNagadProceed" class="nagad-btn-proceed" onclick="proceedToInstructionStep()" disabled>
-                            Proceed
-                        </button>
-                        <a href="<?php echo $backToCheckoutUrl; ?>" class="nagad-btn-close">
-                            Close
-                        </a>
-                    </div>
+                        <!-- Action Buttons -->
+                        <div class="nagad-actions-row">
+                            <button type="submit" id="btnNagadProceed" class="nagad-btn-proceed" disabled>
+                                Proceed
+                            </button>
+                            <a href="<?php echo $backToCheckoutUrl; ?>" class="nagad-btn-close">
+                                Close
+                            </a>
+                        </div>
+                    </form>
 
                     <!-- Nagad Footer Branding -->
                     <div class="nagad-footer-brand">
@@ -248,7 +281,7 @@
                 </div>
 
                 <!-- SCREEN 2: Nagad Waiting / Instruction Screen -->
-                <div id="stepInstructionWaiting" style="display: none;">
+                <div id="stepInstructionWaiting" style="<?php echo $isWaiting ? 'display: block;' : 'display: none;'; ?>">
                     <!-- Centered Cart Icon & Company Name -->
                     <div class="nagad-top-header">
                         <svg class="nagad-cart-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M6 19m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M17 19m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M17 17h-11v-14h-2" /><path d="M6 5l14 1l-1 7h-13" /></svg>
@@ -331,7 +364,7 @@
                      BKASH / ROCKET / UPAY / OTHER PERSONAL LAYOUT
                      ======================================================== -->
                 <!-- SCREEN 2: Generic Personal Payer Number Input Step -->
-                <div id="stepPayerNumber" style="display: block;">
+                <div id="stepPayerNumber" style="<?php echo $isWaiting ? 'display: none;' : 'display: block;'; ?>">
                     <!-- Header -->
                     <div class="branded-header">
                         <div class="branded-logo-box">
@@ -350,26 +383,33 @@
                         </div>
                     </div>
 
-                    <!-- Payer Number Form Section -->
-                    <div class="payer-input-section">
-                        <label class="payer-label" for="payerNumberInput"><?php echo $accountLabel; ?></label>
-                        <input type="tel" id="payerNumberInput" class="payer-input branded-input" placeholder="e.g 01XXXXXXXXX" maxlength="14" autocomplete="tel" oninput="validatePayerNumber()">
-                        <div class="payer-terms branded-text-muted">Confirm and proceed, terms & conditions</div>
-                    </div>
+                    <form class="personal-payment-form" id="formGenericPayment" method="POST" action="" onsubmit="return handlePaymentSubmit(event, 'generic')">
+                        <input type="hidden" name="action-v2" value="custom-personal-payment-start">
+                        <input type="hidden" name="gateway-id" value="<?php echo htmlspecialchars($_GET['gateway']); ?>">
+                        <input type="hidden" name="transaction-id" value="<?php echo htmlspecialchars($data['transaction']['ref']); ?>">
+                        <input type="hidden" name="category" value="<?php echo htmlspecialchars($currentCategory); ?>">
 
-                    <!-- Footer Actions -->
-                    <div class="branded-actions">
-                        <a href="<?php echo $backToCheckoutUrl; ?>" class="branded-btn branded-btn-secondary">
-                            Close
-                        </a>
-                        <button type="button" id="btnConfirmPayer" class="branded-btn branded-btn-primary" onclick="proceedToInstructionStep()" disabled>
-                            Confirm
-                        </button>
-                    </div>
+                        <!-- Payer Number Form Section -->
+                        <div class="payer-input-section">
+                            <label class="payer-label" for="payerNumberInput"><?php echo $accountLabel; ?></label>
+                            <input type="tel" id="payerNumberInput" name="payer_number" class="payer-input branded-input" placeholder="e.g 01XXXXXXXXX" maxlength="14" autocomplete="tel" oninput="validatePayerNumber()">
+                            <div class="payer-terms branded-text-muted">Confirm and proceed, terms & conditions</div>
+                        </div>
+
+                        <!-- Footer Actions -->
+                        <div class="branded-actions">
+                            <a href="<?php echo $backToCheckoutUrl; ?>" class="branded-btn branded-btn-secondary">
+                                Close
+                            </a>
+                            <button type="submit" id="btnConfirmPayer" class="branded-btn branded-btn-primary" disabled>
+                                Confirm
+                            </button>
+                        </div>
+                    </form>
                 </div>
 
                 <!-- SCREEN 3: Generic Personal Payment Instructions / Waiting Step -->
-                <div id="stepInstructionWaiting" style="display: none;">
+                <div id="stepInstructionWaiting" style="<?php echo $isWaiting ? 'display: block;' : 'display: none;'; ?>">
                     <!-- Header with Cart Icon & Brand -->
                     <div class="d-flex align-items-center justify-content-between mb-3 pb-2 border-bottom" style="border-color: rgba(255,255,255,0.2) !important;">
                         <div class="d-flex align-items-center gap-2">
@@ -466,6 +506,22 @@
     <?php echo pp_assets('footer'); ?>
 
     <script data-cfasync="false">
+        var isInitialWaiting = <?php echo $isWaiting ? 'true' : 'false'; ?>;
+        var initialExpiresIn = <?php echo $initialExpiresIn; ?>;
+
+        document.addEventListener('DOMContentLoaded', function() {
+            if (isInitialWaiting) {
+                startCountdown(initialExpiresIn);
+                startPolling();
+            }
+        });
+
+        function handlePaymentSubmit(e, type) {
+            if (e) e.preventDefault();
+            proceedToInstructionStep();
+            return false;
+        }
+
         // Segmented Nagad Input Support
         function focusNagadInput() {
             var inp = document.getElementById('nagadHiddenInput');
@@ -516,27 +572,130 @@
             }
         }
 
+        var pollInterval = null;
+        var countdownInterval = null;
+        var currentSessionId = null;
+        var statusEndpoint = '<?php echo pp_checkout_address() . '?gateway=' . urlencode($_GET['gateway']); ?>';
+
         function proceedToInstructionStep() {
             var nagadInp = document.getElementById('nagadHiddenInput');
             var genInp = document.getElementById('payerNumberInput');
+            var payerNum = '';
 
-            if (nagadInp && nagadInp.value.trim().length < 11) {
-                nagadInp.focus();
-                return;
-            }
-            if (genInp && genInp.value.trim().length < 11) {
-                genInp.focus();
-                return;
+            if (nagadInp && nagadInp.value) {
+                payerNum = nagadInp.value.trim();
+            } else if (genInp && genInp.value) {
+                payerNum = genInp.value.trim();
             }
 
-            document.getElementById('stepPayerNumber').style.display = 'none';
-            document.getElementById('stepInstructionWaiting').style.display = 'block';
-            startCountdown(297); // ~04:57 countdown
+            if (!payerNum || payerNum.length < 11) {
+                if (nagadInp) nagadInp.focus();
+                else if (genInp) genInp.focus();
+                return;
+            }
+
+            var btnProceed = document.getElementById('btnNagadProceed') || document.getElementById('btnConfirmPayer');
+            var origBtnText = btnProceed ? btnProceed.innerHTML : '';
+            if (btnProceed) {
+                btnProceed.disabled = true;
+                btnProceed.innerHTML = '<span class="spinner-border spinner-border-sm" role="status"></span> Processing...';
+            }
+
+            var formData = new FormData();
+            formData.append('action-v2', 'custom-personal-payment-start');
+            formData.append('gateway-id', '<?php echo addslashes($_GET['gateway']); ?>');
+            formData.append('transaction-id', '<?php echo addslashes($data['transaction']['ref']); ?>');
+            formData.append('category', '<?php echo addslashes($currentCategory); ?>');
+            formData.append('payer_number', payerNum);
+
+            fetch(statusEndpoint, {
+                method: 'POST',
+                body: formData
+            })
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+                if (btnProceed) {
+                    btnProceed.disabled = false;
+                    btnProceed.innerHTML = origBtnText;
+                }
+                if (data.status === 'true') {
+                    currentSessionId = data.session_id;
+                    document.getElementById('stepPayerNumber').style.display = 'none';
+                    document.getElementById('stepInstructionWaiting').style.display = 'block';
+                    startCountdown(data.expires_in || 300);
+                    startPolling();
+                } else {
+                    alert(data.message || data.title || 'Unable to start payment session. Please check your number.');
+                }
+            })
+            .catch(function(err) {
+                if (btnProceed) {
+                    btnProceed.disabled = false;
+                    btnProceed.innerHTML = origBtnText;
+                }
+                console.error('Session creation error:', err);
+                alert('Connection error. Please try again.');
+            });
+        }
+
+        function startPolling() {
+            if (pollInterval) clearInterval(pollInterval);
+            pollInterval = setInterval(checkStatus, 2000);
+        }
+
+        function stopPolling() {
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+            }
+        }
+
+        function checkStatus(callback) {
+            fetch(statusEndpoint + '&action=check_session_status')
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+                if (data.status === 'completed') {
+                    stopPolling();
+                    if (countdownInterval) clearInterval(countdownInterval);
+                    var waitLbl = document.getElementById('waitingLabel');
+                    if (waitLbl) waitLbl.textContent = 'Payment verified! Redirecting...';
+                    var autoBtn = document.getElementById('btnAutoVerify');
+                    if (autoBtn) {
+                        autoBtn.disabled = true;
+                        autoBtn.innerHTML = '<svg class="pulse-dot" style="margin-right: 4px;"></svg> Verified!';
+                    }
+                    setTimeout(function() {
+                        window.location.href = data.return_url || '<?php echo pp_checkout_address(); ?>';
+                    }, 800);
+                } else if (data.status === 'expired') {
+                    stopPolling();
+                    var timerEl = document.getElementById('countdownTimer');
+                    if (timerEl) timerEl.textContent = '00:00 (Expired)';
+                    var autoBtn = document.getElementById('btnAutoVerify');
+                    if (autoBtn) autoBtn.disabled = true;
+                    var waitLbl = document.getElementById('waitingLabel');
+                    if (waitLbl) waitLbl.textContent = 'Session expired. Please go back.';
+                }
+                if (typeof callback === 'function') {
+                    callback(data);
+                }
+            })
+            .catch(function(err) {
+                console.error('Status check error:', err);
+                if (typeof callback === 'function') {
+                    callback({status: 'error'});
+                }
+            });
         }
 
         function backToPayerStep() {
+            stopPolling();
+            if (countdownInterval) clearInterval(countdownInterval);
             document.getElementById('stepInstructionWaiting').style.display = 'none';
             document.getElementById('stepPayerNumber').style.display = 'block';
+            if (window.history && window.history.replaceState) {
+                window.history.replaceState({}, document.title, '<?php echo pp_checkout_address() . '?gateway=' . urlencode($_GET['gateway']) . '&category=' . urlencode($currentCategory); ?>');
+            }
         }
 
         function copyMerchantNumber(text) {
@@ -555,7 +714,6 @@
             });
         }
 
-        var countdownInterval = null;
         function startCountdown(durationSeconds) {
             if (countdownInterval) clearInterval(countdownInterval);
             var timer = durationSeconds;
@@ -582,11 +740,17 @@
         function triggerAutoVerification() {
             var btn = document.getElementById('btnAutoVerify');
             if (btn) {
-                btn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status"></span> Verifying...';
+                btn.disabled = true;
+                btn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status"></span> Checking...';
             }
-            setTimeout(function() {
-                location.href = '<?php echo $backToCheckoutUrl; ?>';
-            }, 1000);
+            checkStatus(function(data) {
+                if (data.status !== 'completed') {
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.innerHTML = '<svg class="pulse-dot" style="margin-right: 4px;"></svg> Auto Verification';
+                    }
+                }
+            });
         }
     </script>
 </body>

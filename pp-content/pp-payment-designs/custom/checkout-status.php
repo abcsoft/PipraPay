@@ -28,6 +28,28 @@
 
     $status = strtolower($data['transaction']['status'] ?? 'pending');
 
+    if ($status === 'initiated') {
+        if (!empty($_GET['gateway'])) {
+            include __DIR__ . '/gateway.php';
+            return;
+        } else {
+            $txRef = $data['transaction']['ref'] ?? '';
+            $sessRes = function_exists('pp_get_personal_payment_session_status') ? pp_get_personal_payment_session_status($txRef) : ['status' => 'none'];
+            if (($sessRes['status'] ?? '') === 'waiting') {
+                global $db_prefix;
+                $db_prefix_str = !empty($db_prefix) ? $db_prefix : 'pp_';
+                $sessRow = json_decode(getData($db_prefix_str . 'personal_payment_sessions', 'WHERE transaction_ref = :ref ORDER BY id DESC LIMIT 1', '* FROM', [':ref' => $txRef]), true);
+                if (!empty($sessRow['response'][0]['gateway_id'])) {
+                    $_GET['gateway'] = $sessRow['response'][0]['gateway_id'];
+                    $_GET['category'] = 'mobile_banking';
+                    $_GET['step'] = 'waiting';
+                    include __DIR__ . '/gateway.php';
+                    return;
+                }
+            }
+        }
+    }
+
     $statusMap = [
         'completed' => ['text' => $data['lang']['payment_successful'] ?? 'Payment Successful', 'color' => '#16a34a', 'bg' => 'rgba(22, 163, 74, 0.1)'],
         'pending'   => ['text' => $data['lang']['payment_pending'] ?? 'Payment Pending', 'color' => '#ca8a04', 'bg' => 'rgba(202, 138, 4, 0.1)'],

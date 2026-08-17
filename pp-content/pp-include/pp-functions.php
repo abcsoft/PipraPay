@@ -2702,6 +2702,17 @@
                     return false;
                 }
 
+                $senderNumber = '--';
+                if (is_array($source_info) && !empty($source_info)) {
+                    foreach ($source_info as $item) {
+                        if (!empty($item['label']) && in_array(strtolower($item['label']), ['sender', 'payer number', 'payer_number', 'mobile', 'phone']) && !empty($item['value'])) {
+                            $senderNumber = $item['value'];
+                            break;
+                        }
+                    }
+                }
+                $finalSender = ($senderNumber !== '--') ? $senderNumber : ($response_transaciton['response'][0]['sender'] ?? '--');
+
                 try {
                     $pdo = connectDatabase();
                     $sql = "UPDATE `{$db_prefix}transaction` SET 
@@ -2711,6 +2722,7 @@
                         `local_currency` = :local_currency,
                         `gateway_id` = :gateway_id,
                         `status` = 'completed',
+                        `sender` = :sender,
                         `trx_id` = :trx_id,
                         `source_info` = :source_info,
                         `updated_date` = :updated_date
@@ -2723,6 +2735,7 @@
                         ':local_net_amount'=> $convertedAmount,
                         ':local_currency'  => $response_gateway['response'][0]['currency'],
                         ':gateway_id'       => $gateway_id,
+                        ':sender'          => $finalSender,
                         ':trx_id'          => $trxid,
                         ':source_info'     => $final_source_info,
                         ':updated_date'    => getCurrentDatetime('Y-m-d H:i:s'),
@@ -3352,6 +3365,341 @@
         }
 
         return 'cards';
+    }
+
+    function ensurePersonalPaymentSessionsTable() {
+        static $migrated = false;
+        if ($migrated) return;
+        global $db_prefix;
+        $db_prefix_str = !empty($db_prefix) ? $db_prefix : 'pp_';
+        try {
+            $pdo = connectDatabase();
+            $tableName = $db_prefix_str . 'personal_payment_sessions';
+            $pdo->exec("CREATE TABLE IF NOT EXISTS `{$tableName}` (
+                `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                `transaction_ref` VARCHAR(64) NOT NULL,
+                `brand_id` VARCHAR(64) NOT NULL,
+                `gateway_id` VARCHAR(64) NOT NULL,
+                `sender_key` VARCHAR(32) NOT NULL,
+                `sender_type` VARCHAR(32) NOT NULL DEFAULT 'Personal',
+                `payer_number` VARCHAR(32) NOT NULL,
+                `expected_amount` DECIMAL(18, 2) NOT NULL,
+                `status` VARCHAR(32) NOT NULL DEFAULT 'waiting',
+                `created_at` DATETIME NOT NULL,
+                `expires_at` DATETIME NOT NULL,
+                `matched_sms_id` BIGINT UNSIGNED NULL DEFAULT NULL,
+                `created_date` DATETIME NOT NULL,
+                `updated_date` DATETIME NOT NULL,
+                INDEX `idx_pps_tx_ref` (`transaction_ref`),
+                INDEX `idx_pps_brand_sender` (`brand_id`, `sender_key`, `status`),
+                INDEX `idx_pps_lookup` (`brand_id`, `sender_key`, `payer_number`, `status`, `expires_at`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+            $migrated = true;
+        } catch (Throwable $e) {
+            // Silently catch
+        }
+    }
+
+    function pp_normalize_bd_mobile_number(?string $number): string {
+        if ($number === null) {
+            return '';
+        }
+        $digits = preg_replace('/\D+/', '', $number);
+        if (empty($digits)) {
+            return '';
+        }
+
+        if ((str_starts_with($digits, '880') || str_starts_with($digits, '88')) && strlen($digits) === 13) {
+            $digits = substr($digits, 2);
+        }
+
+        if (strlen($digits) === 10 && str_starts_with($digits, '1')) {
+            $digits = '0' . $digits;
+        }
+
+        if (strlen($digits) === 11 && preg_match('/^01[3-9]\d{8}$/', $digits)) {
+            return $digits;
+        }
+
+        return '';
+    }
+
+    function pp_create_or_update_personal_payment_session(string $transactionRef, string $gatewayId, string $payerNumberRaw, ?string $brandId = null): array {
+        global $db_prefix;
+        ensurePersonalPaymentSessionsTable();
+        $db_prefix_str = !empty($db_prefix) ? $db_prefix : 'pp_';
+
+        $txRef = trim($transactionRef);
+        if (empty($txRef)) {
+            return ['status' => 'false', 'message' => 'Missing transaction reference.'];
+        }
+
+        $paramsTx = [':ref' => $txRef];
+        $txRes = json_decode(getData($db_prefix_str . 'transaction', 'WHERE ref = :ref AND status = "initiated"', '* FROM', $paramsTx), true);
+        if (empty($txRes['status']) || empty($txRes['response'])) {
+            return ['status' => 'false', 'message' => 'Transaction not found or is no longer initiated.'];
+        }
+        $txRow = $txRes['response'][0];
+        $actualBrandId = $txRow['brand_id'];
+
+        $paramsGw = [':gateway_id' => $gatewayId, ':brand_id' => $actualBrandId];
+        $gwRes = json_decode(getData($db_prefix_str . 'gateways', 'WHERE gateway_id = :gateway_id AND brand_id = :brand_id AND status = "active"', '* FROM', $paramsGw), true);
+        if (empty($gwRes['status']) || empty($gwRes['response'])) {
+            return ['status' => 'false', 'message' => 'Invalid or inactive gateway for this brand.'];
+        }
+
+        $gatewayInfo = pp_gateway_info($gatewayId, ['brand' => ['id' => $actualBrandId]]);
+        $personalMeta = pp_is_personal_mobile_banking_gateway($gatewayInfo);
+        if (!$personalMeta) {
+            return ['status' => 'false', 'message' => 'Gateway does not support personal auto-verification.'];
+        }
+
+        $normalizedNumber = pp_normalize_bd_mobile_number($payerNumberRaw);
+        if (empty($normalizedNumber)) {
+            return ['status' => 'false', 'message' => 'Please enter a valid 11-digit Bangladesh mobile number (e.g. 017XXXXXXXX).'];
+        }
+
+        $expectedAmount = !empty($txRow['local_net_amount']) && bccomp((string)$txRow['local_net_amount'], "0", 2) > 0
+            ? money_round($txRow['local_net_amount'], 2)
+            : money_round($txRow['amount'], 2);
+
+        $now = getCurrentDatetime('Y-m-d H:i:s');
+        $expiresAt = date('Y-m-d H:i:s', time() + 300);
+
+        try {
+            $pdo = connectDatabase();
+            $tableName = $db_prefix_str . 'personal_payment_sessions';
+
+            // Cancel any previous waiting sessions for this transaction_ref
+            $stmtCancel = $pdo->prepare("UPDATE `{$tableName}` SET `status` = 'canceled', `updated_date` = :now WHERE `transaction_ref` = :ref AND `status` = 'waiting'");
+            $stmtCancel->execute([':now' => $now, ':ref' => $txRef]);
+
+            // Insert active waiting session
+            $stmtIns = $pdo->prepare("INSERT INTO `{$tableName}` (`transaction_ref`, `brand_id`, `gateway_id`, `sender_key`, `sender_type`, `payer_number`, `expected_amount`, `status`, `created_at`, `expires_at`, `created_date`, `updated_date`) VALUES (:transaction_ref, :brand_id, :gateway_id, :sender_key, 'Personal', :payer_number, :expected_amount, 'waiting', :created_at, :expires_at, :created_date, :updated_date)");
+            $stmtIns->execute([
+                ':transaction_ref' => $txRef,
+                ':brand_id'        => $actualBrandId,
+                ':gateway_id'      => $gatewayId,
+                ':sender_key'      => strtolower($personalMeta['sender_key']),
+                ':payer_number'    => $normalizedNumber,
+                ':expected_amount' => $expectedAmount,
+                ':created_at'      => $now,
+                ':expires_at'      => $expiresAt,
+                ':created_date'    => $now,
+                ':updated_date'    => $now,
+            ]);
+
+            $sessionId = (int)$pdo->lastInsertId();
+
+            return [
+                'status'       => 'true',
+                'session_id'   => $sessionId,
+                'expires_in'   => 300,
+                'expires_at'   => $expiresAt,
+                'payer_number' => $normalizedNumber,
+            ];
+        } catch (Throwable $e) {
+            error_log("Failed to create personal payment session: " . $e->getMessage());
+            return ['status' => 'false', 'message' => 'Unable to initialize waiting session. Please try again.'];
+        }
+    }
+
+    function pp_get_personal_payment_session_status(string $transactionRef): array {
+        global $db_prefix;
+        ensurePersonalPaymentSessionsTable();
+        $db_prefix_str = !empty($db_prefix) ? $db_prefix : 'pp_';
+
+        $txRef = trim($transactionRef);
+        if (empty($txRef)) {
+            return ['status' => 'false', 'message' => 'Missing transaction reference.'];
+        }
+
+        $paramsTx = [':ref' => $txRef];
+        $txRes = json_decode(getData($db_prefix_str . 'transaction', 'WHERE ref = :ref', '* FROM', $paramsTx), true);
+        if (empty($txRes['status']) || empty($txRes['response'])) {
+            return ['status' => 'false', 'message' => 'Transaction not found.'];
+        }
+        $txRow = $txRes['response'][0];
+        $txStatus = strtolower($txRow['status'] ?? '');
+
+        $returnUrl = pp_checkout_address($txRef);
+        if (!empty($txRow['return_url']) && $txRow['return_url'] !== '--') {
+            $returnUrl = addQueryParams($txRow['return_url'], [
+                'pp_status'       => $txStatus,
+                'transaction_ref' => $txRef
+            ]);
+        }
+
+        if ($txStatus === 'completed') {
+            return [
+                'status'     => 'completed',
+                'return_url' => $returnUrl,
+                'trx_id'     => $txRow['trx_id'] ?? ''
+            ];
+        }
+
+        if ($txStatus === 'canceled') {
+            return [
+                'status'     => 'canceled',
+                'return_url' => $returnUrl
+            ];
+        }
+
+        $paramsSess = [':ref' => $txRef];
+        $sessRes = json_decode(getData($db_prefix_str . 'personal_payment_sessions', 'WHERE transaction_ref = :ref ORDER BY id DESC LIMIT 1', '* FROM', $paramsSess), true);
+        if (empty($sessRes['status']) || empty($sessRes['response'])) {
+            return ['status' => 'no_session'];
+        }
+
+        $session = $sessRes['response'][0];
+        $sessStatus = strtolower($session['status'] ?? '');
+
+        if ($sessStatus === 'completed') {
+            return [
+                'status'     => 'completed',
+                'return_url' => $returnUrl,
+                'trx_id'     => $txRow['trx_id'] ?? ''
+            ];
+        }
+
+        $nowTs = time();
+        $expireTs = strtotime($session['expires_at']);
+
+        if ($expireTs <= $nowTs) {
+            if ($sessStatus === 'waiting') {
+                try {
+                    $pdo = connectDatabase();
+                    $pdo->prepare("UPDATE `{$db_prefix_str}personal_payment_sessions` SET `status` = 'expired', `updated_date` = :now WHERE `id` = :id AND `status` = 'waiting'")
+                        ->execute([':now' => getCurrentDatetime('Y-m-d H:i:s'), ':id' => $session['id']]);
+                } catch (Throwable $e) {}
+            }
+            return ['status' => 'expired', 'expires_in' => 0];
+        }
+
+        $remainingSeconds = max(0, $expireTs - $nowTs);
+        return [
+            'status'       => 'waiting',
+            'expires_in'   => $remainingSeconds,
+            'payer_number' => $session['payer_number']
+        ];
+    }
+
+    function pp_match_and_complete_personal_payment(string $senderKey, string $smsPayerNumberRaw, string $smsAmount, string $smsTrxId, ?int $smsId = null, ?string $brandId = null): array {
+        global $db_prefix;
+        ensurePersonalPaymentSessionsTable();
+        $db_prefix_str = !empty($db_prefix) ? $db_prefix : 'pp_';
+
+        $normalizedPayer = pp_normalize_bd_mobile_number($smsPayerNumberRaw);
+        if (empty($normalizedPayer)) {
+            return ['status' => 'false', 'matched' => false, 'reason' => 'Invalid SMS sender phone number.'];
+        }
+
+        $senderKeyNormalized = strtolower(trim($senderKey));
+        $smsAmountNormalized = money_round($smsAmount, 2);
+        $smsTrxIdClean = trim($smsTrxId);
+        $now = getCurrentDatetime('Y-m-d H:i:s');
+
+        try {
+            $pdo = connectDatabase();
+            $tableName = $db_prefix_str . 'personal_payment_sessions';
+            $txTable = $db_prefix_str . 'transaction';
+            $brandTable = $db_prefix_str . 'brands';
+
+            $sql = "SELECT s.*, t.status AS tx_status, t.local_net_amount AS tx_local_net, t.amount AS tx_amount, b.payment_tolerance 
+                    FROM `{$tableName}` s 
+                    JOIN `{$txTable}` t ON t.ref = s.transaction_ref 
+                    JOIN `{$brandTable}` b ON b.brand_id = s.brand_id 
+                    WHERE s.sender_key = :sender_key 
+                      AND s.payer_number = :payer_number 
+                      AND s.status = 'waiting' 
+                      AND s.expires_at >= :now 
+                      AND t.status = 'initiated'";
+            $params = [
+                ':sender_key'   => $senderKeyNormalized,
+                ':payer_number' => $normalizedPayer,
+                ':now'          => $now
+            ];
+
+            if (!empty($brandId) && $brandId !== '--') {
+                $sql .= " AND s.brand_id = :brand_id";
+                $params[':brand_id'] = $brandId;
+            }
+
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            $allSessions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            if (empty($allSessions)) {
+                return ['status' => 'none', 'matched' => false, 'reason' => 'No active waiting session found.'];
+            }
+
+            $matchedSessions = [];
+            foreach ($allSessions as $sess) {
+                $tolerance = !empty($sess['payment_tolerance']) && $sess['payment_tolerance'] !== '--' ? $sess['payment_tolerance'] : '0';
+                if (verifyPaymentTolerance((string)$sess['expected_amount'], (string)$smsAmountNormalized, (string)$tolerance)) {
+                    $matchedSessions[] = $sess;
+                }
+            }
+
+            if (count($matchedSessions) === 0) {
+                return ['status' => 'amount_mismatch', 'matched' => false, 'reason' => 'Amount did not match expected session amount within tolerance.'];
+            }
+
+            // AMBIGUITY RULE: If more than 1 session matches, FAIL CLOSED.
+            if (count($matchedSessions) > 1) {
+                error_log("[Personal Auto-Verify] FAIL CLOSED: Multiple (" . count($matchedSessions) . ") waiting sessions matched for number {$normalizedPayer} and amount {$smsAmountNormalized}. None will be auto-completed.");
+                return ['status' => 'ambiguous', 'matched' => false, 'reason' => 'Ambiguous match: multiple waiting sessions detected. Failing closed.'];
+            }
+
+            // EXACTLY ONE MATCH
+            $target = $matchedSessions[0];
+
+            // Atomically claim session from 'waiting' -> 'matched'
+            $stmtClaim = $pdo->prepare("UPDATE `{$tableName}` SET `status` = 'matched', `updated_date` = :now WHERE `id` = :id AND `status` = 'waiting'");
+            $stmtClaim->execute([':now' => $now, ':id' => $target['id']]);
+            if ($stmtClaim->rowCount() !== 1) {
+                return ['status' => 'race_condition', 'matched' => false, 'reason' => 'Session was claimed concurrently.'];
+            }
+
+            // Complete the transaction with real parsed SMS TrxID
+            $sourceInfo = [
+                ['label' => 'Payer Number', 'value' => $target['payer_number']],
+                ['label' => 'MFS TrxID', 'value' => $smsTrxIdClean]
+            ];
+
+            $completed = pp_set_transaction_status($target['transaction_ref'], 'completed', $target['gateway_id'], $smsTrxIdClean, $sourceInfo);
+
+            if ($completed) {
+                $stmtDone = $pdo->prepare("UPDATE `{$tableName}` SET `status` = 'completed', `matched_sms_id` = :sms_id, `updated_date` = :now WHERE `id` = :id");
+                $stmtDone->execute([
+                    ':sms_id' => $smsId,
+                    ':now'    => $now,
+                    ':id'     => $target['id']
+                ]);
+
+                if (!empty($smsId)) {
+                    $pdo->prepare("UPDATE `{$db_prefix_str}sms_data` SET `status` = 'used', `updated_date` = :now WHERE `id` = :sms_id AND `status` = 'approved'")
+                        ->execute([':now' => $now, ':sms_id' => $smsId]);
+                }
+
+                return [
+                    'status'          => 'completed',
+                    'matched'         => true,
+                    'transaction_ref' => $target['transaction_ref'],
+                    'gateway_id'      => $target['gateway_id'],
+                    'trx_id'          => $smsTrxIdClean
+                ];
+            } else {
+                // Roll back session status to waiting
+                $pdo->prepare("UPDATE `{$tableName}` SET `status` = 'waiting', `updated_date` = :now WHERE `id` = :id AND `status` = 'matched'")
+                    ->execute([':now' => $now, ':id' => $target['id']]);
+
+                return ['status' => 'tx_completion_failed', 'matched' => false, 'reason' => 'pp_set_transaction_status failed.'];
+            }
+        } catch (Throwable $e) {
+            error_log("Error in pp_match_and_complete_personal_payment: " . $e->getMessage());
+            return ['status' => 'error', 'matched' => false, 'reason' => $e->getMessage()];
+        }
     }
 
     function pp_gateway_render($gateway_id = '', $data = []){

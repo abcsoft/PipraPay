@@ -5,3 +5,4 @@ backups/
 pp-media/storage/
 scratch/
 *.sql
+!pp-content/pp-migrations/*.sql
