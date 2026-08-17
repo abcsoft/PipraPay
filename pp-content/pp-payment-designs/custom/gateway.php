@@ -60,9 +60,14 @@
         exit();
     }
 
-    if (isset($_GET['action']) && $_GET['action'] === 'check_session_status') {
+    if ((isset($_GET['action-v2']) && $_GET['action-v2'] === 'custom-personal-payment-status') ||
+        (isset($_POST['action-v2']) && $_POST['action-v2'] === 'custom-personal-payment-status') ||
+        (isset($_GET['action']) && $_GET['action'] === 'check_session_status')) {
         header('Content-Type: application/json; charset=utf-8');
-        $txRef = trim((string)($data['transaction']['ref'] ?? ''));
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('Pragma: no-cache');
+        header('Expires: 0');
+        $txRef = trim((string)($data['transaction']['ref'] ?? $_GET['transaction-id'] ?? $_POST['transaction-id'] ?? ''));
         $res = pp_get_personal_payment_session_status($txRef);
         echo json_encode($res);
         exit();
@@ -156,7 +161,8 @@
 
     // Detect if an active waiting session exists or if step=waiting requested
     $activeSess = function_exists('pp_get_personal_payment_session_status') ? pp_get_personal_payment_session_status($ref) : ['status' => 'none'];
-    $isWaiting = (($activeSess['status'] ?? '') === 'waiting') || (isset($_GET['step']) && $_GET['step'] === 'waiting');
+    $activePStatus = strtolower((string)($activeSess['payment_status'] ?? $activeSess['status'] ?? ''));
+    $isWaiting = ($activePStatus === 'waiting') || (isset($_GET['step']) && $_GET['step'] === 'waiting');
     $initialExpiresIn = ($isWaiting && !empty($activeSess['expires_in'])) ? (int)$activeSess['expires_in'] : 300;
 ?>
 
@@ -575,6 +581,8 @@
         var pollInterval = null;
         var countdownInterval = null;
         var currentSessionId = null;
+        var txRef = '<?php echo addslashes($data['transaction']['ref'] ?? ''); ?>';
+        var checkoutUrl = '<?php echo pp_checkout_address(); ?>';
         var statusEndpoint = '<?php echo pp_checkout_address() . '?gateway=' . urlencode($_GET['gateway']); ?>';
 
         function proceedToInstructionStep() {
@@ -604,12 +612,13 @@
             var formData = new FormData();
             formData.append('action-v2', 'custom-personal-payment-start');
             formData.append('gateway-id', '<?php echo addslashes($_GET['gateway']); ?>');
-            formData.append('transaction-id', '<?php echo addslashes($data['transaction']['ref']); ?>');
+            formData.append('transaction-id', txRef);
             formData.append('category', '<?php echo addslashes($currentCategory); ?>');
             formData.append('payer_number', payerNum);
 
-            fetch(statusEndpoint, {
+            fetch(checkoutUrl, {
                 method: 'POST',
+                cache: 'no-store',
                 body: formData
             })
             .then(function(res) { return res.json(); })
@@ -651,10 +660,24 @@
         }
 
         function checkStatus(callback) {
-            fetch(statusEndpoint + '&action=check_session_status')
-            .then(function(res) { return res.json(); })
+            var formData = new FormData();
+            formData.append('action-v2', 'custom-personal-payment-status');
+            formData.append('transaction-id', txRef);
+
+            fetch(checkoutUrl, {
+                method: 'POST',
+                cache: 'no-store',
+                body: formData
+            })
+            .then(function(res) {
+                if (!res.ok) {
+                    throw new Error('HTTP ' + res.status);
+                }
+                return res.json();
+            })
             .then(function(data) {
-                if (data.status === 'completed') {
+                var paymentStatus = (data && (data.payment_status || data.status) || '').toLowerCase();
+                if (paymentStatus === 'completed') {
                     stopPolling();
                     if (countdownInterval) clearInterval(countdownInterval);
                     var waitLbl = document.getElementById('waitingLabel');
@@ -664,26 +687,33 @@
                         autoBtn.disabled = true;
                         autoBtn.innerHTML = '<svg class="pulse-dot" style="margin-right: 4px;"></svg> Verified!';
                     }
+                    var targetUrl = data.redirect_url || data.return_url || checkoutUrl;
                     setTimeout(function() {
-                        window.location.href = data.return_url || '<?php echo pp_checkout_address(); ?>';
-                    }, 800);
-                } else if (data.status === 'expired') {
+                        window.location.replace(targetUrl);
+                    }, 500);
+                } else if (paymentStatus === 'expired') {
                     stopPolling();
+                    if (countdownInterval) clearInterval(countdownInterval);
                     var timerEl = document.getElementById('countdownTimer');
                     if (timerEl) timerEl.textContent = '00:00 (Expired)';
                     var autoBtn = document.getElementById('btnAutoVerify');
                     if (autoBtn) autoBtn.disabled = true;
                     var waitLbl = document.getElementById('waitingLabel');
                     if (waitLbl) waitLbl.textContent = 'Session expired. Please go back.';
+                } else if (paymentStatus === 'canceled' || paymentStatus === 'refunded') {
+                    stopPolling();
+                    if (countdownInterval) clearInterval(countdownInterval);
+                    var targetUrl = data.redirect_url || data.return_url || checkoutUrl;
+                    window.location.replace(targetUrl);
                 }
                 if (typeof callback === 'function') {
                     callback(data);
                 }
             })
             .catch(function(err) {
-                console.error('Status check error:', err);
+                console.warn('Status check transient error (retrying):', err);
                 if (typeof callback === 'function') {
-                    callback({status: 'error'});
+                    callback({status: 'error', payment_status: 'error'});
                 }
             });
         }
@@ -744,7 +774,8 @@
                 btn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status"></span> Checking...';
             }
             checkStatus(function(data) {
-                if (data.status !== 'completed') {
+                var paymentStatus = (data && (data.payment_status || data.status) || '').toLowerCase();
+                if (paymentStatus !== 'completed') {
                     if (btn) {
                         btn.disabled = false;
                         btn.innerHTML = '<svg class="pulse-dot" style="margin-right: 4px;"></svg> Auto Verification';

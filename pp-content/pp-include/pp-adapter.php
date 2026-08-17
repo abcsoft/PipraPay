@@ -8688,8 +8688,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
         exit();
     }
 
-    if(isset($_POST['action-v2'])){
-        $action = escape_string($_POST['action-v2'] ?? '');
+    if(isset($_POST['action-v2']) || isset($_GET['action-v2'])){
+        $action = escape_string($_POST['action-v2'] ?? $_GET['action-v2'] ?? '');
 
         if($action == ""){
             echo json_encode(['status' => "false", 'title' => 'Oops! Something went wrong', 'message' => 'Your request could not be processed. Please try again.']);
@@ -9461,6 +9461,28 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         'message' => $sessRes['message'] ?? 'Unable to initialize waiting session.'
                     ]);
                 }
+                exit();
+            }
+
+            if($action == "custom-personal-payment-status"){
+                header('Content-Type: application/json; charset=utf-8');
+                header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+                header('Pragma: no-cache');
+                header('Expires: 0');
+
+                $transaction_id = trim(escape_string($_POST['transaction-id'] ?? $_POST['ref'] ?? $_POST['transaction_ref'] ?? $_GET['transaction-id'] ?? $_GET['ref'] ?? $_GET['transaction_ref'] ?? ''));
+
+                if(empty($transaction_id)){
+                    echo json_encode([
+                        'status'         => 'false',
+                        'payment_status' => 'error',
+                        'message'        => 'Missing transaction reference.'
+                    ]);
+                    exit();
+                }
+
+                $res = pp_get_personal_payment_session_status($transaction_id);
+                echo json_encode($res);
                 exit();
             }
         }

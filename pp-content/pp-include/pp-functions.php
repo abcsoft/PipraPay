@@ -3525,16 +3525,16 @@
 
         $txRef = trim($transactionRef);
         if (empty($txRef)) {
-            return ['status' => 'false', 'message' => 'Missing transaction reference.'];
+            return ['status' => 'false', 'payment_status' => 'error', 'message' => 'Missing transaction reference.'];
         }
 
         $paramsTx = [':ref' => $txRef];
         $txRes = json_decode(getData($db_prefix_str . 'transaction', 'WHERE ref = :ref', '* FROM', $paramsTx), true);
         if (empty($txRes['status']) || empty($txRes['response'])) {
-            return ['status' => 'false', 'message' => 'Transaction not found.'];
+            return ['status' => 'false', 'payment_status' => 'not_found', 'message' => 'Transaction not found.'];
         }
         $txRow = $txRes['response'][0];
-        $txStatus = strtolower($txRow['status'] ?? '');
+        $txStatus = strtolower(trim((string)($txRow['status'] ?? '')));
 
         $returnUrl = pp_checkout_address($txRef);
         if (!empty($txRow['return_url']) && $txRow['return_url'] !== '--') {
@@ -3544,40 +3544,58 @@
             ]);
         }
 
+        // 1. Authoritative check: If transaction is completed, it is ALWAYS completed!
         if ($txStatus === 'completed') {
+            try {
+                $pdo = connectDatabase();
+                $pdo->prepare("UPDATE `{$db_prefix_str}personal_payment_sessions` SET `status` = 'completed', `updated_date` = :now WHERE `transaction_ref` = :ref AND `status` IN ('waiting', 'matched')")
+                    ->execute([':now' => getCurrentDatetime('Y-m-d H:i:s'), ':ref' => $txRef]);
+            } catch (Throwable $e) {}
+
             return [
-                'status'     => 'completed',
-                'return_url' => $returnUrl,
-                'trx_id'     => $txRow['trx_id'] ?? ''
+                'status'         => 'true',
+                'payment_status' => 'completed',
+                'redirect_url'   => $returnUrl,
+                'return_url'     => $returnUrl,
+                'trx_id'         => $txRow['trx_id'] ?? ''
             ];
         }
 
-        if ($txStatus === 'canceled') {
+        if ($txStatus === 'canceled' || $txStatus === 'refunded') {
             return [
-                'status'     => 'canceled',
-                'return_url' => $returnUrl
+                'status'         => 'true',
+                'payment_status' => $txStatus,
+                'redirect_url'   => $returnUrl,
+                'return_url'     => $returnUrl
             ];
         }
 
         $paramsSess = [':ref' => $txRef];
         $sessRes = json_decode(getData($db_prefix_str . 'personal_payment_sessions', 'WHERE transaction_ref = :ref ORDER BY id DESC LIMIT 1', '* FROM', $paramsSess), true);
         if (empty($sessRes['status']) || empty($sessRes['response'])) {
-            return ['status' => 'no_session'];
+            return [
+                'status'         => 'true',
+                'payment_status' => ($txStatus === 'initiated') ? 'waiting' : $txStatus,
+                'redirect_url'   => $returnUrl,
+                'return_url'     => $returnUrl
+            ];
         }
 
         $session = $sessRes['response'][0];
-        $sessStatus = strtolower($session['status'] ?? '');
+        $sessStatus = strtolower((string)($session['status'] ?? ''));
 
         if ($sessStatus === 'completed') {
             return [
-                'status'     => 'completed',
-                'return_url' => $returnUrl,
-                'trx_id'     => $txRow['trx_id'] ?? ''
+                'status'         => 'true',
+                'payment_status' => 'completed',
+                'redirect_url'   => $returnUrl,
+                'return_url'     => $returnUrl,
+                'trx_id'         => $txRow['trx_id'] ?? ''
             ];
         }
 
         $nowTs = time();
-        $expireTs = strtotime($session['expires_at']);
+        $expireTs = !empty($session['expires_at']) ? strtotime($session['expires_at']) : ($nowTs + 300);
 
         if ($expireTs <= $nowTs) {
             if ($sessStatus === 'waiting') {
@@ -3587,14 +3605,19 @@
                         ->execute([':now' => getCurrentDatetime('Y-m-d H:i:s'), ':id' => $session['id']]);
                 } catch (Throwable $e) {}
             }
-            return ['status' => 'expired', 'expires_in' => 0];
+            return [
+                'status'         => 'true',
+                'payment_status' => 'expired',
+                'expires_in'     => 0
+            ];
         }
 
         $remainingSeconds = max(0, $expireTs - $nowTs);
         return [
-            'status'       => 'waiting',
-            'expires_in'   => $remainingSeconds,
-            'payer_number' => $session['payer_number']
+            'status'         => 'true',
+            'payment_status' => 'waiting',
+            'expires_in'     => $remainingSeconds,
+            'payer_number'   => $session['payer_number'] ?? ''
         ];
     }
 

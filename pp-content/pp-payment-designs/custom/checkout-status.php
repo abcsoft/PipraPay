@@ -26,6 +26,19 @@
         }
     }
 
+    if ((isset($_GET['action-v2']) && $_GET['action-v2'] === 'custom-personal-payment-status') ||
+        (isset($_POST['action-v2']) && $_POST['action-v2'] === 'custom-personal-payment-status') ||
+        (isset($_GET['action']) && $_GET['action'] === 'check_session_status')) {
+        header('Content-Type: application/json; charset=utf-8');
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('Pragma: no-cache');
+        header('Expires: 0');
+        $txRef = trim((string)($data['transaction']['ref'] ?? $_GET['transaction-id'] ?? $_POST['transaction-id'] ?? ''));
+        $res = pp_get_personal_payment_session_status($txRef);
+        echo json_encode($res);
+        exit();
+    }
+
     $status = strtolower($data['transaction']['status'] ?? 'pending');
 
     if ($status === 'initiated') {
@@ -35,7 +48,8 @@
         } else {
             $txRef = $data['transaction']['ref'] ?? '';
             $sessRes = function_exists('pp_get_personal_payment_session_status') ? pp_get_personal_payment_session_status($txRef) : ['status' => 'none'];
-            if (($sessRes['status'] ?? '') === 'waiting') {
+            $pStatus = strtolower((string)($sessRes['payment_status'] ?? $sessRes['status'] ?? ''));
+            if ($pStatus === 'waiting') {
                 global $db_prefix;
                 $db_prefix_str = !empty($db_prefix) ? $db_prefix : 'pp_';
                 $sessRow = json_decode(getData($db_prefix_str . 'personal_payment_sessions', 'WHERE transaction_ref = :ref ORDER BY id DESC LIMIT 1', '* FROM', [':ref' => $txRef]), true);
