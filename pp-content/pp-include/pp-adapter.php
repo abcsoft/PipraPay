@@ -6451,13 +6451,14 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                                         insertData($db_prefix.'sms_data', $columns, $values);
 
-                                        if (strtolower($type) === 'personal' && !empty($phone_number) && !empty($transaction_id) && !empty($amount)) {
-                                            $smsId = null;
-                                            $smsChk = json_decode(getData($db_prefix.'sms_data', 'WHERE sender_key = :sender_key AND trx_id = :trx_id ORDER BY id DESC LIMIT 1', 'id FROM', [':sender_key' => $sender_key, ':trx_id' => $transaction_id]), true);
-                                            if (!empty($smsChk['response'][0]['id'])) {
-                                                $smsId = (int)$smsChk['response'][0]['id'];
-                                            }
-                                            pp_match_and_complete_personal_payment($sender_key, $phone_number, $amount, $transaction_id, $smsId, null);
+                                        $smsId = null;
+                                        $smsChk = json_decode(getData($db_prefix.'sms_data', 'WHERE sender_key = :sender_key AND trx_id = :trx_id ORDER BY id DESC LIMIT 1', 'id FROM', [':sender_key' => $sender_key, ':trx_id' => $transaction_id]), true);
+                                        if (!empty($smsChk['response'][0]['id'])) {
+                                            $smsId = (int)$smsChk['response'][0]['id'];
+                                        }
+
+                                        if (!empty($smsId) && $status === 'approved') {
+                                            pp_process_personal_payment_sms($smsId);
                                         }
 
                                         echo json_encode(['status' => 'true', 'title' => 'SMS Data Created', 'message' => 'The sms data has been created successfully.'.$amount, 'csrf_token' => $new_csrf_token]);
@@ -6497,13 +6498,14 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                                     insertData($db_prefix.'sms_data', $columns, $values);
 
-                                    if (strtolower($type) === 'personal' && !empty($phone_number) && !empty($transaction_id) && !empty($amount)) {
-                                        $smsId = null;
-                                        $smsChk = json_decode(getData($db_prefix.'sms_data', 'WHERE sender_key = :sender_key AND trx_id = :trx_id ORDER BY id DESC LIMIT 1', 'id FROM', [':sender_key' => $sender_key, ':trx_id' => $transaction_id]), true);
-                                        if (!empty($smsChk['response'][0]['id'])) {
-                                            $smsId = (int)$smsChk['response'][0]['id'];
-                                        }
-                                        pp_match_and_complete_personal_payment($sender_key, $phone_number, $amount, $transaction_id, $smsId, null);
+                                    $smsId = null;
+                                    $smsChk = json_decode(getData($db_prefix.'sms_data', 'WHERE sender_key = :sender_key AND trx_id = :trx_id ORDER BY id DESC LIMIT 1', 'id FROM', [':sender_key' => $sender_key, ':trx_id' => $transaction_id]), true);
+                                    if (!empty($smsChk['response'][0]['id'])) {
+                                        $smsId = (int)$smsChk['response'][0]['id'];
+                                    }
+
+                                    if (!empty($smsId) && $status === 'approved') {
+                                        pp_process_personal_payment_sms($smsId);
                                     }
 
                                     echo json_encode(['status' => 'true', 'title' => 'SMS Data Created', 'message' => 'The sms data has been created successfully.', 'csrf_token' => $new_csrf_token]);
@@ -6635,6 +6637,10 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                     
                                     updateData($db_prefix.'sms_data', $columns, $values, $condition);
 
+                                    if ($status === 'approved') {
+                                        pp_process_personal_payment_sms($itemid);
+                                    }
+
                                     echo json_encode(['status' => 'true', 'title' => 'SMS Data Updated', 'message' => 'The sms data has been updated successfully.', 'csrf_token' => $new_csrf_token]);
                                 }
                             }
@@ -6676,8 +6682,12 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                 $values = [$device_id, $sender_key, $phone_number, money_sanitize($amount), $currency, $transaction_id, money_sanitize($balance), $type, $entry_type, $status, $message, getCurrentDatetime('Y-m-d H:i:s')];
 
                                 $condition = "id = '".$itemid."'"; 
-                                
+                                    
                                 updateData($db_prefix.'sms_data', $columns, $values, $condition);
+
+                                if ($status === 'approved') {
+                                    pp_process_personal_payment_sms($itemid);
+                                }
 
                                 echo json_encode(['status' => 'true', 'title' => 'SMS Data Updated', 'message' => 'The sms data has been updated successfully.', 'csrf_token' => $new_csrf_token]);
                             }
@@ -9846,15 +9856,16 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                         $smsId = (int)$smsChk['response'][0]['id'];
                                     }
 
-                                    if (strtolower($type) === 'personal' && !empty($phone_number) && !empty($transaction_id) && !empty($amount)) {
-                                        $brandIdToMatch = !empty($deviceRow['brand_id']) && $deviceRow['brand_id'] !== '--' ? $deviceRow['brand_id'] : null;
-                                        pp_match_and_complete_personal_payment($sender_key, $phone_number, $amount, $transaction_id, $smsId, $brandIdToMatch);
+                                    if (!empty($smsId)) {
+                                        pp_process_personal_payment_sms($smsId);
                                     }
 
                                     $results[] = ['id' => $id, 'status' => 'accepted'];
                                 }else{
                                     $params = [ ':device_id' => $device_id, ':sender_key' => $sender_key, ':type' => $type ];
                                     $response_balance_verification = json_decode(getData($db_prefix.'balance_verification','WHERE device_id = :device_id AND sender_key = :sender_key AND type = :type', '* FROM', $params),true);
+
+                                    $needsReconciliation = false;
 
                                     if(is_array($response_balance_verification) && !empty($response_balance_verification['status']) && !empty($response_balance_verification['response'])){
                                         if($response_balance_verification['response'][0]['status'] == "active"){
@@ -9877,7 +9888,7 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                             }else{
                                                 $status = 'awaiting-review';
                                                 $reason = 'SMS balance and expected balance do not match';
-                                                reconcileByLongestChain($device_id, $sender_key, $type);
+                                                $needsReconciliation = true;
                                             }
                                         }else{
                                             $status = 'approved';
@@ -9892,14 +9903,16 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                     $values = ['app', $device_id, $id, $sender, $sender_key, $simslot, $phone_number, money_sanitize($amount), $currency, $transaction_id, money_sanitize($balance), $type, $status, $message, $reason, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
                                     insertData($db_prefix.'sms_data', $columns, $values);
 
-                                    if ($status === 'approved' && strtolower($type) === 'personal' && !empty($phone_number) && !empty($transaction_id) && !empty($amount)) {
-                                        $smsId = null;
-                                        $smsChk = json_decode(getData($db_prefix.'sms_data', 'WHERE sender_key = :sender_key AND trx_id = :trx_id ORDER BY id DESC LIMIT 1', 'id FROM', [':sender_key' => $sender_key, ':trx_id' => $transaction_id]), true);
-                                        if (!empty($smsChk['response'][0]['id'])) {
-                                            $smsId = (int)$smsChk['response'][0]['id'];
-                                        }
-                                        $brandIdToMatch = !empty($deviceRow['brand_id']) && $deviceRow['brand_id'] !== '--' ? $deviceRow['brand_id'] : null;
-                                        pp_match_and_complete_personal_payment($sender_key, $phone_number, $amount, $transaction_id, $smsId, $brandIdToMatch);
+                                    $smsId = null;
+                                    $smsChk = json_decode(getData($db_prefix.'sms_data', 'WHERE sender_key = :sender_key AND trx_id = :trx_id ORDER BY id DESC LIMIT 1', 'id FROM', [':sender_key' => $sender_key, ':trx_id' => $transaction_id]), true);
+                                    if (!empty($smsChk['response'][0]['id'])) {
+                                        $smsId = (int)$smsChk['response'][0]['id'];
+                                    }
+
+                                    if ($status === 'approved' && !empty($smsId)) {
+                                        pp_process_personal_payment_sms($smsId);
+                                    } elseif ($needsReconciliation) {
+                                        reconcileByLongestChain($device_id, $sender_key, $type);
                                     }
 
                                     $results[] = ['id' => $id, 'status' => ($status === 'error') ? 'error' : 'accepted'];
