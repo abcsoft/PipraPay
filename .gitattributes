@@ -1,0 +1,8 @@
+scratch/ export-ignore
+scratch/** export-ignore
+tests/ export-ignore
+tests/** export-ignore
+backups/ export-ignore
+backups/** export-ignore
+.github/ export-ignore
+.github/** export-ignore
