@@ -3456,6 +3456,10 @@
         $txRow = $txRes['response'][0];
         $actualBrandId = $txRow['brand_id'];
 
+        if (!empty($brandId) && $brandId !== '--' && $brandId !== $actualBrandId) {
+            return ['status' => 'false', 'message' => 'Brand mismatch for this transaction.'];
+        }
+
         $paramsGw = [':gateway_id' => $gatewayId, ':brand_id' => $actualBrandId];
         $gwRes = json_decode(getData($db_prefix_str . 'gateways', 'WHERE gateway_id = :gateway_id AND brand_id = :brand_id AND status = "active"', '* FROM', $paramsGw), true);
         if (empty($gwRes['status']) || empty($gwRes['response'])) {
@@ -3504,6 +3508,22 @@
             ]);
 
             $sessionId = (int)$pdo->lastInsertId();
+
+            // Atomically bind selected gateway metadata to the transaction while preserving initiated status
+            $stmtTxUpdate = $pdo->prepare("UPDATE `{$db_prefix_str}transaction` SET 
+                `gateway_id` = :gateway_id, 
+                `sender_key` = :sender_key, 
+                `sender_type` = 'Personal', 
+                `sender` = :sender, 
+                `updated_date` = :now 
+                WHERE `ref` = :ref AND `status` = 'initiated'");
+            $stmtTxUpdate->execute([
+                ':gateway_id' => $gatewayId,
+                ':sender_key' => strtolower($personalMeta['sender_key']),
+                ':sender'     => $normalizedNumber,
+                ':now'        => $now,
+                ':ref'        => $txRef
+            ]);
 
             return [
                 'status'       => 'true',
