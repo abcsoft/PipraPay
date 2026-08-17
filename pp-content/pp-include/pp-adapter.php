@@ -6849,8 +6849,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     $filter_start  = trim($_POST['filter_start'] ?? '');
                     $filter_end    = trim($_POST['filter_end'] ?? '');
 
-                    $where = ['brand_id = :brand_id', 'status NOT IN (:init)'];
-                    $params_trx = [':brand_id' => $global_response_brand['response'][0]['brand_id'], ':init' => 'initiated'];
+                    $where = ['brand_id = :brand_id'];
+                    $params_trx = [':brand_id' => $global_response_brand['response'][0]['brand_id']];
 
                     if ($tabType !== '' && $tabType !== 'all') {
                         $where[] = 'status = :tab_status';
@@ -6873,8 +6873,16 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                     }
 
                     if ($search_input !== '') {
-                        $where[] = '(customer_info LIKE :search OR trx_id LIKE :search OR gateway_slug LIKE :search OR sender LIKE :search)';
-                        $params_trx[':search'] = '%' . $search_input . '%';
+                        $where[] = '(customer_info LIKE :search_c OR ref LIKE :search_r OR trx_id LIKE :search_t OR sender LIKE :search_s OR sender_key LIKE :search_k OR gateway_id IN (SELECT gateway_id FROM `'.$db_prefix.'gateways` WHERE name LIKE :search_gw OR display LIKE :search_gw2 OR slug LIKE :search_gw3))';
+                        $searchWildcard = '%' . $search_input . '%';
+                        $params_trx[':search_c'] = $searchWildcard;
+                        $params_trx[':search_r'] = $searchWildcard;
+                        $params_trx[':search_t'] = $searchWildcard;
+                        $params_trx[':search_s'] = $searchWildcard;
+                        $params_trx[':search_k'] = $searchWildcard;
+                        $params_trx[':search_gw'] = $searchWildcard;
+                        $params_trx[':search_gw2'] = $searchWildcard;
+                        $params_trx[':search_gw3'] = $searchWildcard;
                     }
 
                     $where_sql = 'WHERE ' . implode(' AND ', $where);

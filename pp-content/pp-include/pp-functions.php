@@ -3621,12 +3621,37 @@
         ];
     }
 
+    function pp_mask_phone_number(string $number): string {
+        $num = trim($number);
+        $len = strlen($num);
+        if ($len <= 4) {
+            return '****';
+        }
+        return substr($num, 0, 3) . '****' . substr($num, -4);
+    }
+
+    function pp_log_personal_match_diagnostic(string $code, ?int $smsId, string $senderKey, string $payerNumber, string $amount, string $reason, ?string $txRef = null): void {
+        $masked = pp_mask_phone_number($payerNumber);
+        $safeLog = sprintf(
+            "[Personal Auto-Verify Diagnostic] Code: %s | SMS ID: %s | Key: %s | Payer: %s | Amount: %s | Ref: %s | Reason: %s",
+            $code,
+            $smsId !== null ? (string)$smsId : 'N/A',
+            $senderKey,
+            $masked,
+            $amount,
+            $txRef !== null ? $txRef : 'N/A',
+            $reason
+        );
+        error_log($safeLog);
+    }
+
     function pp_process_personal_payment_sms($smsDataId): array {
         global $db_prefix;
         $db_prefix_str = !empty($db_prefix) ? $db_prefix : 'pp_';
 
         if (empty($smsDataId)) {
-            return ['status' => 'false', 'code' => 'SMS_NOT_FOUND', 'matched' => false, 'reason' => 'Empty SMS Data ID'];
+            pp_log_personal_match_diagnostic('SMS_NOT_FOUND', null, 'unknown', '', '0.00', 'Empty SMS Data ID');
+            return ['status' => 'false', 'code' => 'SMS_NOT_FOUND', 'result' => 'SMS_NOT_FOUND', 'matched' => false, 'reason' => 'Empty SMS Data ID'];
         }
 
         try {
@@ -3636,32 +3661,38 @@
             $smsRow = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if (!$smsRow) {
-                return ['status' => 'false', 'code' => 'SMS_NOT_FOUND', 'matched' => false, 'reason' => 'SMS data row not found'];
-            }
-
-            if (strtolower((string)($smsRow['status'] ?? '')) === 'used') {
-                return ['status' => 'false', 'code' => 'SMS_ALREADY_USED', 'matched' => false, 'reason' => 'SMS is already used'];
-            }
-
-            if (strtolower((string)($smsRow['status'] ?? '')) !== 'approved') {
-                return ['status' => 'false', 'code' => 'SMS_NOT_APPROVED', 'matched' => false, 'reason' => 'SMS status is not approved'];
-            }
-
-            if (strtolower((string)($smsRow['type'] ?? '')) !== 'personal') {
-                return ['status' => 'false', 'code' => 'INVALID_TYPE', 'matched' => false, 'reason' => 'SMS type is not Personal'];
+                pp_log_personal_match_diagnostic('SMS_NOT_FOUND', (int)$smsDataId, 'unknown', '', '0.00', 'SMS data row not found');
+                return ['status' => 'false', 'code' => 'SMS_NOT_FOUND', 'result' => 'SMS_NOT_FOUND', 'matched' => false, 'reason' => 'SMS data row not found'];
             }
 
             $senderKey = strtolower(trim((string)($smsRow['sender_key'] ?? '')));
-            if (empty($senderKey) || $senderKey === '--') {
-                return ['status' => 'false', 'code' => 'SENDER_KEY_MISMATCH', 'matched' => false, 'reason' => 'Invalid sender key'];
-            }
-
             $payerNumber = trim((string)($smsRow['number'] ?? ''));
             $amount = trim((string)($smsRow['amount'] ?? '0'));
             $trxId = trim((string)($smsRow['trx_id'] ?? ''));
 
+            if (strtolower((string)($smsRow['status'] ?? '')) === 'used') {
+                pp_log_personal_match_diagnostic('SMS_ALREADY_USED', (int)$smsDataId, $senderKey, $payerNumber, $amount, 'SMS is already used');
+                return ['status' => 'false', 'code' => 'SMS_ALREADY_USED', 'result' => 'SMS_ALREADY_USED', 'matched' => false, 'reason' => 'SMS is already used', 'sms_id' => (int)$smsDataId];
+            }
+
+            if (strtolower((string)($smsRow['status'] ?? '')) !== 'approved') {
+                pp_log_personal_match_diagnostic('SMS_NOT_APPROVED', (int)$smsDataId, $senderKey, $payerNumber, $amount, 'SMS status is not approved');
+                return ['status' => 'false', 'code' => 'SMS_NOT_APPROVED', 'result' => 'SMS_NOT_APPROVED', 'matched' => false, 'reason' => 'SMS status is not approved', 'sms_id' => (int)$smsDataId];
+            }
+
+            if (strtolower((string)($smsRow['type'] ?? '')) !== 'personal') {
+                pp_log_personal_match_diagnostic('INVALID_TYPE', (int)$smsDataId, $senderKey, $payerNumber, $amount, 'SMS type is not Personal');
+                return ['status' => 'false', 'code' => 'INVALID_TYPE', 'result' => 'INVALID_TYPE', 'matched' => false, 'reason' => 'SMS type is not Personal', 'sms_id' => (int)$smsDataId];
+            }
+
+            if (empty($senderKey) || $senderKey === '--') {
+                pp_log_personal_match_diagnostic('SENDER_KEY_MISMATCH', (int)$smsDataId, 'empty', $payerNumber, $amount, 'Invalid sender key');
+                return ['status' => 'false', 'code' => 'SENDER_KEY_MISMATCH', 'result' => 'SENDER_KEY_MISMATCH', 'matched' => false, 'reason' => 'Invalid sender key', 'sms_id' => (int)$smsDataId];
+            }
+
             if (empty($payerNumber) || empty($amount) || empty($trxId)) {
-                return ['status' => 'false', 'code' => 'INCOMPLETE_SMS_DATA', 'matched' => false, 'reason' => 'Missing payer number, amount, or trx_id in SMS'];
+                pp_log_personal_match_diagnostic('INCOMPLETE_SMS_DATA', (int)$smsDataId, $senderKey, $payerNumber, $amount, 'Missing payer number, amount, or trx_id in SMS');
+                return ['status' => 'false', 'code' => 'INCOMPLETE_SMS_DATA', 'result' => 'INCOMPLETE_SMS_DATA', 'matched' => false, 'reason' => 'Missing payer number, amount, or trx_id in SMS', 'sms_id' => (int)$smsDataId];
             }
 
             $brandIdToMatch = !empty($smsRow['device_brand_id']) && $smsRow['device_brand_id'] !== '--' ? $smsRow['device_brand_id'] : null;
@@ -3669,7 +3700,7 @@
             return pp_match_and_complete_personal_payment($senderKey, $payerNumber, $amount, $trxId, (int)$smsRow['id'], $brandIdToMatch);
         } catch (Throwable $e) {
             error_log("[Personal Auto-Verify] Error in pp_process_personal_payment_sms: " . $e->getMessage());
-            return ['status' => 'error', 'code' => 'EXCEPTION', 'matched' => false, 'reason' => $e->getMessage()];
+            return ['status' => 'error', 'code' => 'EXCEPTION', 'result' => 'EXCEPTION', 'matched' => false, 'reason' => $e->getMessage(), 'sms_id' => (int)$smsDataId];
         }
     }
 
@@ -3680,7 +3711,8 @@
 
         $normalizedPayer = pp_normalize_bd_mobile_number($smsPayerNumberRaw);
         if (empty($normalizedPayer)) {
-            return ['status' => 'false', 'code' => 'PAYER_NUMBER_MISMATCH', 'matched' => false, 'reason' => 'Invalid SMS sender phone number.'];
+            pp_log_personal_match_diagnostic('PAYER_NUMBER_MISMATCH', $smsId, $senderKey, $smsPayerNumberRaw, $smsAmount, 'Invalid SMS sender phone number');
+            return ['status' => 'false', 'code' => 'PAYER_NUMBER_MISMATCH', 'result' => 'PAYER_NUMBER_MISMATCH', 'matched' => false, 'reason' => 'Invalid SMS sender phone number.', 'sms_id' => $smsId];
         }
 
         $senderKeyNormalized = strtolower(trim($senderKey));
@@ -3697,10 +3729,12 @@
                 $smsStatus = $stmtSmsChk->fetchColumn();
                 if ($smsStatus !== false) {
                     if (strtolower($smsStatus) === 'used') {
-                        return ['status' => 'false', 'code' => 'SMS_ALREADY_USED', 'matched' => false, 'reason' => 'SMS has already been used for another transaction.'];
+                        pp_log_personal_match_diagnostic('SMS_ALREADY_USED', $smsId, $senderKeyNormalized, $normalizedPayer, $smsAmountNormalized, 'SMS has already been used for another transaction.');
+                        return ['status' => 'false', 'code' => 'SMS_ALREADY_USED', 'result' => 'SMS_ALREADY_USED', 'matched' => false, 'reason' => 'SMS has already been used for another transaction.', 'sms_id' => $smsId];
                     }
                     if (strtolower($smsStatus) !== 'approved') {
-                        return ['status' => 'false', 'code' => 'SMS_NOT_APPROVED', 'matched' => false, 'reason' => 'SMS status is not approved.'];
+                        pp_log_personal_match_diagnostic('SMS_NOT_APPROVED', $smsId, $senderKeyNormalized, $normalizedPayer, $smsAmountNormalized, 'SMS status is not approved.');
+                        return ['status' => 'false', 'code' => 'SMS_NOT_APPROVED', 'result' => 'SMS_NOT_APPROVED', 'matched' => false, 'reason' => 'SMS status is not approved.', 'sms_id' => $smsId];
                     }
                 }
             }
@@ -3739,21 +3773,27 @@
                 $diagRow = $diagStmt->fetch(PDO::FETCH_ASSOC);
 
                 if ($diagRow) {
+                    $diagRef = $diagRow['transaction_ref'] ?? null;
                     if ($diagRow['expires_at'] < $now && $diagRow['status'] === 'waiting') {
-                        return ['status' => 'none', 'code' => 'SESSION_EXPIRED', 'matched' => false, 'reason' => 'Session has expired.'];
+                        pp_log_personal_match_diagnostic('SESSION_EXPIRED', $smsId, $senderKeyNormalized, $normalizedPayer, $smsAmountNormalized, 'Session has expired.', $diagRef);
+                        return ['status' => 'none', 'code' => 'SESSION_EXPIRED', 'result' => 'SESSION_EXPIRED', 'matched' => false, 'reason' => 'Session has expired.', 'transaction_ref' => $diagRef, 'sms_id' => $smsId];
                     }
                     if ($diagRow['tx_status'] !== 'initiated') {
-                        return ['status' => 'none', 'code' => 'TRANSACTION_NOT_INITIATED', 'matched' => false, 'reason' => 'Transaction is no longer in initiated state.'];
+                        pp_log_personal_match_diagnostic('TRANSACTION_NOT_INITIATED', $smsId, $senderKeyNormalized, $normalizedPayer, $smsAmountNormalized, 'Transaction is no longer in initiated state.', $diagRef);
+                        return ['status' => 'none', 'code' => 'TRANSACTION_NOT_INITIATED', 'result' => 'TRANSACTION_NOT_INITIATED', 'matched' => false, 'reason' => 'Transaction is no longer in initiated state.', 'transaction_ref' => $diagRef, 'sms_id' => $smsId];
                     }
                     if ($diagRow['sender_key'] !== $senderKeyNormalized) {
-                        return ['status' => 'none', 'code' => 'SENDER_KEY_MISMATCH', 'matched' => false, 'reason' => 'MFS sender key mismatch.'];
+                        pp_log_personal_match_diagnostic('SENDER_KEY_MISMATCH', $smsId, $senderKeyNormalized, $normalizedPayer, $smsAmountNormalized, 'MFS sender key mismatch.', $diagRef);
+                        return ['status' => 'none', 'code' => 'SENDER_KEY_MISMATCH', 'result' => 'SENDER_KEY_MISMATCH', 'matched' => false, 'reason' => 'MFS sender key mismatch.', 'transaction_ref' => $diagRef, 'sms_id' => $smsId];
                     }
                     if (!empty($brandId) && $brandId !== '--' && $diagRow['brand_id'] !== $brandId) {
-                        return ['status' => 'none', 'code' => 'BRAND_MISMATCH', 'matched' => false, 'reason' => 'Brand mismatch.'];
+                        pp_log_personal_match_diagnostic('BRAND_MISMATCH', $smsId, $senderKeyNormalized, $normalizedPayer, $smsAmountNormalized, 'Brand mismatch.', $diagRef);
+                        return ['status' => 'none', 'code' => 'BRAND_MISMATCH', 'result' => 'BRAND_MISMATCH', 'matched' => false, 'reason' => 'Brand mismatch.', 'transaction_ref' => $diagRef, 'sms_id' => $smsId];
                     }
                 }
 
-                return ['status' => 'none', 'code' => 'NO_WAITING_SESSION', 'matched' => false, 'reason' => 'No active waiting session found for this payer number.'];
+                pp_log_personal_match_diagnostic('NO_WAITING_SESSION', $smsId, $senderKeyNormalized, $normalizedPayer, $smsAmountNormalized, 'No active waiting session found for this payer number.');
+                return ['status' => 'none', 'code' => 'NO_WAITING_SESSION', 'result' => 'NO_WAITING_SESSION', 'matched' => false, 'reason' => 'No active waiting session found for this payer number.', 'sms_id' => $smsId];
             }
 
             $matchedSessions = [];
@@ -3765,13 +3805,15 @@
             }
 
             if (count($matchedSessions) === 0) {
-                return ['status' => 'amount_mismatch', 'code' => 'AMOUNT_MISMATCH', 'matched' => false, 'reason' => 'Amount did not match expected session amount within tolerance.'];
+                $firstRef = $allSessions[0]['transaction_ref'] ?? null;
+                pp_log_personal_match_diagnostic('AMOUNT_MISMATCH', $smsId, $senderKeyNormalized, $normalizedPayer, $smsAmountNormalized, 'Amount did not match expected session amount within tolerance.', $firstRef);
+                return ['status' => 'amount_mismatch', 'code' => 'AMOUNT_MISMATCH', 'result' => 'AMOUNT_MISMATCH', 'matched' => false, 'reason' => 'Amount did not match expected session amount within tolerance.', 'transaction_ref' => $firstRef, 'sms_id' => $smsId];
             }
 
             // AMBIGUITY RULE: If more than 1 session matches, FAIL CLOSED.
             if (count($matchedSessions) > 1) {
-                error_log("[Personal Auto-Verify] FAIL CLOSED: Multiple (" . count($matchedSessions) . ") waiting sessions matched for number {$normalizedPayer} and amount {$smsAmountNormalized}. None will be auto-completed.");
-                return ['status' => 'ambiguous', 'code' => 'AMBIGUOUS_MATCH', 'matched' => false, 'reason' => 'Ambiguous match: multiple waiting sessions detected. Failing closed.'];
+                pp_log_personal_match_diagnostic('AMBIGUOUS_MATCH', $smsId, $senderKeyNormalized, $normalizedPayer, $smsAmountNormalized, "Ambiguous match: multiple (" . count($matchedSessions) . ") waiting sessions detected. Failing closed.");
+                return ['status' => 'ambiguous', 'code' => 'AMBIGUOUS_MATCH', 'result' => 'AMBIGUOUS_MATCH', 'matched' => false, 'reason' => 'Ambiguous match: multiple waiting sessions detected. Failing closed.', 'sms_id' => $smsId];
             }
 
             // EXACTLY ONE MATCH
@@ -3781,7 +3823,8 @@
             $stmtClaim = $pdo->prepare("UPDATE `{$tableName}` SET `status` = 'matched', `updated_date` = :now WHERE `id` = :id AND `status` = 'waiting'");
             $stmtClaim->execute([':now' => $now, ':id' => $target['id']]);
             if ($stmtClaim->rowCount() !== 1) {
-                return ['status' => 'race_condition', 'code' => 'MATCHED', 'matched' => false, 'reason' => 'Session was claimed concurrently.'];
+                pp_log_personal_match_diagnostic('MATCHED', $smsId, $senderKeyNormalized, $normalizedPayer, $smsAmountNormalized, 'Session was claimed concurrently.', $target['transaction_ref']);
+                return ['status' => 'race_condition', 'code' => 'MATCHED', 'result' => 'MATCHED', 'matched' => false, 'reason' => 'Session was claimed concurrently.', 'transaction_ref' => $target['transaction_ref'], 'sms_id' => $smsId];
             }
 
             // Complete the transaction with real parsed SMS TrxID
@@ -3805,24 +3848,30 @@
                         ->execute([':now' => $now, ':sms_id' => $smsId]);
                 }
 
+                pp_log_personal_match_diagnostic('TRANSACTION_COMPLETED', $smsId, $senderKeyNormalized, $normalizedPayer, $smsAmountNormalized, 'Personal payment matched and completed successfully.', $target['transaction_ref']);
+
                 return [
                     'status'          => 'completed',
                     'code'            => 'TRANSACTION_COMPLETED',
+                    'result'          => 'MATCHED',
                     'matched'         => true,
                     'transaction_ref' => $target['transaction_ref'],
                     'gateway_id'      => $target['gateway_id'],
-                    'trx_id'          => $smsTrxIdClean
+                    'trx_id'          => $smsTrxIdClean,
+                    'sms_id'          => $smsId
                 ];
             } else {
                 // Roll back session status to waiting
                 $pdo->prepare("UPDATE `{$tableName}` SET `status` = 'waiting', `updated_date` = :now WHERE `id` = :id AND `status` = 'matched'")
                     ->execute([':now' => $now, ':id' => $target['id']]);
 
-                return ['status' => 'tx_completion_failed', 'code' => 'TRANSACTION_COMPLETE_FAILED', 'matched' => false, 'reason' => 'pp_set_transaction_status failed.'];
+                pp_log_personal_match_diagnostic('TRANSACTION_COMPLETE_FAILED', $smsId, $senderKeyNormalized, $normalizedPayer, $smsAmountNormalized, 'pp_set_transaction_status failed.', $target['transaction_ref']);
+
+                return ['status' => 'tx_completion_failed', 'code' => 'TRANSACTION_COMPLETE_FAILED', 'result' => 'TRANSACTION_COMPLETE_FAILED', 'matched' => false, 'reason' => 'pp_set_transaction_status failed.', 'transaction_ref' => $target['transaction_ref'], 'sms_id' => $smsId];
             }
         } catch (Throwable $e) {
             error_log("Error in pp_match_and_complete_personal_payment: " . $e->getMessage());
-            return ['status' => 'error', 'code' => 'EXCEPTION', 'matched' => false, 'reason' => $e->getMessage()];
+            return ['status' => 'error', 'code' => 'EXCEPTION', 'result' => 'EXCEPTION', 'matched' => false, 'reason' => $e->getMessage(), 'sms_id' => $smsId];
         }
     }
 

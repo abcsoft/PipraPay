@@ -378,7 +378,7 @@
         }
     }
 
-    function load_data_list(page = 1){
+    function load_data_list(page = 1, showSpinner = true){
         currentPage = page;
 
         var csrf_token_default = $('input[name="csrf_token_default"]').val();
@@ -393,7 +393,9 @@
 
         let html = '';
 
-        $(".table-data-list").html('<tr><td colspan="5" class="text-center text-muted"><div class="spinner-border text-primary" style="margin: 50px;">  <span class="visually-hidden">Loading...</span></div></td></tr>');
+        if (showSpinner) {
+            $(".table-data-list").html('<tr><td colspan="9" class="text-center text-muted"><div class="spinner-border text-primary" style="margin: 50px;">  <span class="visually-hidden">Loading...</span></div></td></tr>');
+        }
 
         $.ajax({
             type: 'POST',
@@ -432,7 +434,9 @@
                         if (item.status === 'pending') badge = 'warning';
                         if (item.status === 'refunded') badge = 'warning';
                         if (item.status === 'canceled') badge = 'danger';
+                        if (item.status === 'initiated') badge = 'info';
 
+                        let statusLabel = (item.status === 'initiated') ? 'Awaiting Payment' : (item.status.charAt(0).toUpperCase() + item.status.slice(1));
                         let contactText = item.email && item.email.trim() !== '' ? item.email : item.mobile;
                         html += `
                             <tr data-id="${escapeHtml(item.id)}">
@@ -450,7 +454,7 @@
                                 <td ${redirectEdit}>${escapeHtml(item.net_amount)}</td>
                                 <td ${redirectEdit}>${escapeHtml(item.trx_id)}</td>
                                 <td ${redirectEdit}>${escapeHtml(item.created_date)}</td>
-                                <td ${redirectEdit}><span class="badge bg-${badge} me-1"></span> ${escapeHtml(item.status.charAt(0).toUpperCase() + item.status.slice(1))}</td>
+                                <td ${redirectEdit}><span class="badge bg-${badge} me-1"></span> ${escapeHtml(statusLabel)}</td>
                                 <td class="text-end">
                                     <span class="dropdown" style="position: unset;">
                                         <button class="btn dropdown-toggle align-text-top" data-bs-boundary="viewport" data-bs-toggle="dropdown" aria-expanded="false">Actions</button>
@@ -472,7 +476,7 @@
 
                     $(".table-data-list-pagination").html(res.pagination);
                 } else {
-                    html = `<td colspan="7" class="text-center text-muted"> <div style="margin: 50px;"> <center> <svg xmlns="http://www.w3.org/2000/svg" style=" width: 40px; height: 40px; " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-mood-cry"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M9 10l.01 0" /><path d="M15 10l.01 0" /><path d="M9.5 15.25a3.5 3.5 0 0 1 5 0" /><path d="M17.566 17.606a2 2 0 1 0 2.897 .03l-1.463 -1.636l-1.434 1.606z" /><path d="M20.865 13.517a8.937 8.937 0 0 0 .135 -1.517a9 9 0 1 0 -9 9c.69 0 1.36 -.076 2 -.222" /></svg> <p style=" font-weight: 600; font-size: 16px; margin-top: 7px; margin-bottom: 3px; ">`+res.title+`</p> <p style=" margin: 0; ">`+res.message+`</p> </center> </div> </td>`;
+                    html = `<td colspan="9" class="text-center text-muted"> <div style="margin: 50px;"> <center> <svg xmlns="http://www.w3.org/2000/svg" style=" width: 40px; height: 40px; " viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-mood-cry"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M9 10l.01 0" /><path d="M15 10l.01 0" /><path d="M9.5 15.25a3.5 3.5 0 0 1 5 0" /><path d="M17.566 17.606a2 2 0 1 0 2.897 .03l-1.463 -1.636l-1.434 1.606z" /><path d="M20.865 13.517a8.937 8.937 0 0 0 .135 -1.517a9 9 0 1 0 -9 9c.69 0 1.36 -.076 2 -.222" /></svg> <p style=" font-weight: 600; font-size: 16px; margin-top: 7px; margin-bottom: 3px; ">`+res.title+`</p> <p style=" margin: 0; ">`+res.message+`</p> </center> </div> </td>`;
                     $(".table-data-list").html(html);
                     document.querySelector(".table-data-list-entries").innerHTML = 'Showing <strong>0 to 0</strong> of <strong>0 entries</strong>';
 
@@ -497,6 +501,34 @@
     });
 
     load_data_list(1);
+
+    var liveRefreshInterval = null;
+
+    function startLiveRefresh() {
+        stopLiveRefresh();
+        liveRefreshInterval = setInterval(function () {
+            if (!document.hidden) {
+                if ($('.modal.show').length === 0 && $('.rowCheckbox:checked').length === 0) {
+                    load_data_list(currentPage || 1, false);
+                }
+            }
+        }, 5000);
+    }
+
+    function stopLiveRefresh() {
+        if (liveRefreshInterval) {
+            clearInterval(liveRefreshInterval);
+            liveRefreshInterval = null;
+        }
+    }
+
+    document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) {
+            load_data_list(currentPage || 1, false);
+        }
+    });
+
+    startLiveRefresh();
 
     function filter_hide_show_reset(className) {
         const container = document.querySelector('.' + className);
