@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 125" width="100%" height="100%">
+  <!-- White Container Card -->
+  <rect width="360" height="125" rx="10" fill="#FFFFFF" />
+
+  <!-- Tile 1: Send Money (Highlighted) -->
+  <g transform="translate(18, 14)">
+    <!-- Red Highlight Box -->
+    <rect x="-4" y="-4" width="72" height="100" rx="6" fill="none" stroke="#E6242B" stroke-width="2" />
+    
+    <!-- Icon Container -->
+    <rect x="0" y="0" width="64" height="64" rx="12" fill="url(#nagadIconGrad1)" />
+    <!-- Hand & Money Icon -->
+    <path d="M 20 38 C 24 34, 30 30, 44 32 C 40 38, 36 42, 28 44 Z" fill="#FFFFFF" opacity="0.9" />
+    <circle cx="34" cy="26" r="6" fill="#FFFFFF" />
+    <path d="M 28 26 L 40 26 M 34 20 L 34 32" stroke="#E6242B" stroke-width="1.5" stroke-linecap="round" />
+    
+    <!-- Label -->
+    <text x="32" y="84" font-family="-apple-system, sans-serif" font-size="11" font-weight="bold" fill="#333333" text-anchor="middle">সেন্ড মানি</text>
+  </g>
+
+  <!-- Red Curved Pointer Arrow -->
+  <path d="M 210 20 C 140 -5, 80 15, 66 32" fill="none" stroke="#E6242B" stroke-width="3" stroke-linecap="round" />
+  <path d="M 62 24 L 66 34 L 75 30" fill="#E6242B" />
+
+  <!-- Tile 2: Cash Out -->
+  <g transform="translate(102, 18)" opacity="0.85">
+    <rect x="0" y="0" width="60" height="60" rx="12" fill="url(#nagadIconGrad2)" />
+    <circle cx="30" cy="30" r="14" fill="#FFFFFF" opacity="0.8" />
+    <path d="M 25 30 L 35 30 M 30 25 L 30 35" stroke="#E6242B" stroke-width="2" stroke-linecap="round" />
+    <text x="30" y="80" font-family="-apple-system, sans-serif" font-size="10" fill="#666666" text-anchor="middle">ক্যাশ আউট</text>
+  </g>
+
+  <!-- Tile 3: Mobile Recharge -->
+  <g transform="translate(180, 18)" opacity="0.85">
+    <rect x="0" y="0" width="60" height="60" rx="12" fill="url(#nagadIconGrad2)" />
+    <rect x="22" y="16" width="16" height="28" rx="3" fill="#FFFFFF" opacity="0.8" />
+    <circle cx="30" cy="38" r="1.5" fill="#E6242B" />
+    <text x="30" y="80" font-family="-apple-system, sans-serif" font-size="9" fill="#666666" text-anchor="middle">মোবাইল রিচার্জ</text>
+  </g>
+
+  <!-- Tile 4: Add Money -->
+  <g transform="translate(258, 18)" opacity="0.85">
+    <rect x="0" y="0" width="60" height="60" rx="12" fill="url(#nagadIconGrad2)" />
+    <circle cx="30" cy="30" r="14" fill="#FFFFFF" opacity="0.8" />
+    <path d="M 24 30 L 36 30" stroke="#E6242B" stroke-width="2" stroke-linecap="round" />
+    <text x="30" y="80" font-family="-apple-system, sans-serif" font-size="10" fill="#666666" text-anchor="middle">অ্যাড মানি</text>
+  </g>
+
+  <defs>
+    <linearGradient id="nagadIconGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF6B4A" />
+      <stop offset="100%" stop-color="#E6242B" />
+    </linearGradient>
+    <linearGradient id="nagadIconGrad2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFA07A" />
+      <stop offset="100%" stop-color="#F25E3E" />
+    </linearGradient>
+  </defs>
+</svg>

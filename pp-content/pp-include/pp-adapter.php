@@ -6719,6 +6719,40 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                 }
             }
 
+            if($action == "payment-design-active"){
+                if($global_user_login == true){
+                    if (!canAccessPage(json_decode($global_response_permission['response'][0]['permission'], true), 'brand_settings', $global_user_response['response'][0]['role'])) {
+                        echo json_encode(['status' => 'false', 'title' => 'Access denied', 'message' => 'You need permission to perform this action. Please contact the admin.' , 'csrf_token' => $new_csrf_token]);
+                        exit();
+                    }
+
+                    if (!hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'theme_settings', 'edit', $global_user_response['response'][0]['role'])) {
+                        echo json_encode(['status' => 'false', 'title' => 'Access denied', 'message' => 'You need permission to perform this action. Please contact the admin.' , 'csrf_token' => $new_csrf_token]);
+                        exit();
+                    }
+
+                    $slug = escape_string(trim($_POST['slug'] ?? ''));
+                    if (empty($slug) || !preg_match('/^[a-zA-Z0-9_-]+$/', $slug)) {
+                        echo json_encode(['status' => 'false', 'title' => 'Invalid Design', 'message' => 'The selected payment design slug is invalid.', 'csrf_token' => $new_csrf_token]);
+                        exit();
+                    }
+
+                    $designDir = __DIR__ . '/../pp-payment-designs/' . $slug;
+                    if (!is_dir($designDir)) {
+                        echo json_encode(['status' => 'false', 'title' => 'Design Not Found', 'message' => 'The selected payment design does not exist.', 'csrf_token' => $new_csrf_token]);
+                        exit();
+                    }
+
+                    set_env('payment_page_design', $slug, $global_response_brand['response'][0]['brand_id']);
+
+                    echo json_encode(['status' => 'true', 'title' => 'Design Activated', 'message' => 'Payment page design has been activated successfully.', 'csrf_token' => $new_csrf_token]);
+                    exit();
+                }else{
+                    echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => 'Invalid request' , 'csrf_token' => $new_csrf_token]);
+                    exit();
+                }
+            }
+
             if($action == "theme-setting-update"){
                 if($global_user_login == true){
                     if (!canAccessPage(json_decode($global_response_permission['response'][0]['permission'], true), 'brand_settings', $global_user_response['response'][0]['role'])) {

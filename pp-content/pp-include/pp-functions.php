@@ -3230,6 +3230,130 @@
         ];
     }
 
+    function pp_is_personal_mobile_banking_gateway($gatewayData) {
+        if (empty($gatewayData)) {
+            return false;
+        }
+
+        $slug = '';
+        if (is_string($gatewayData)) {
+            $slug = trim($gatewayData);
+        } elseif (isset($gatewayData['gateway']['slug'])) {
+            $slug = trim($gatewayData['gateway']['slug']);
+        } elseif (isset($gatewayData['slug'])) {
+            $slug = trim($gatewayData['slug']);
+        }
+
+        if (empty($slug) || !preg_match('/^[a-zA-Z0-9_-]+$/', $slug)) {
+            return false;
+        }
+
+        $gatewayFile = __DIR__ . '/../pp-modules/pp-gateways/' . $slug . '/class.php';
+        if (!file_exists($gatewayFile)) {
+            return false;
+        }
+
+        require_once $gatewayFile;
+        $class = str_replace(' ', '', ucwords(str_replace('-', ' ', $slug))) . 'Gateway';
+        if (!class_exists($class)) {
+            return false;
+        }
+
+        $instance = new $class();
+        if (!method_exists($instance, 'info')) {
+            return false;
+        }
+
+        $info = $instance->info();
+        if (!is_array($info)) {
+            return false;
+        }
+
+        $gatewayType = strtolower(trim((string)($info['gateway_type'] ?? '')));
+        $senderType  = strtolower(trim((string)($info['sender_type'] ?? '')));
+        $senderKey   = strtolower(trim((string)($info['sender_key'] ?? '')));
+
+        if ($gatewayType === 'automation' && $senderType === 'personal' && !empty($senderKey)) {
+            return [
+                'is_personal'  => true,
+                'sender_key'   => $senderKey,
+                'sender_type'  => $info['sender_type'] ?? 'Personal',
+                'gateway_type' => $info['gateway_type'] ?? 'automation',
+                'info'         => $info,
+            ];
+        }
+
+        return false;
+    }
+
+    function pp_custom_payment_category($gateway) {
+        if (empty($gateway)) {
+            return 'cards';
+        }
+
+        $slug = '';
+        $tab = '';
+        if (is_string($gateway)) {
+            $slug = trim($gateway);
+        } elseif (isset($gateway['slug'])) {
+            $slug = trim($gateway['slug']);
+            $tab = strtolower(trim((string)($gateway['tab'] ?? '')));
+        } elseif (isset($gateway['gateway']['slug'])) {
+            $slug = trim($gateway['gateway']['slug']);
+            $tab = strtolower(trim((string)($gateway['gateway']['tab'] ?? '')));
+        }
+
+        $slug = strtolower($slug);
+
+        if ($tab === 'bank' || $slug === 'bank' || strpos($slug, 'bank') !== false) {
+            return 'net_banking';
+        }
+
+        $gatewayFile = __DIR__ . '/../pp-modules/pp-gateways/' . $slug . '/class.php';
+        $info = [];
+        if (file_exists($gatewayFile)) {
+            require_once $gatewayFile;
+            $class = str_replace(' ', '', ucwords(str_replace('-', ' ', $slug))) . 'Gateway';
+            if (class_exists($class)) {
+                $instance = new $class();
+                if (method_exists($instance, 'info')) {
+                    $info = $instance->info() ?? [];
+                }
+            }
+        }
+
+        $senderKey = strtolower(trim((string)($info['sender_key'] ?? '')));
+        $gwTab     = strtolower(trim((string)($info['tab'] ?? $tab)));
+
+        if ($gwTab === 'bank') {
+            return 'net_banking';
+        }
+
+        $knownMfsKeys = [
+            'bkash', 'nagad', 'rocket', 'upay', 'cellfin', 'tap', 
+            'ipay', 'mcash', 'okwallet', 'pathaopay', 'telecash'
+        ];
+        $knownMfsSlugs = [
+            'bkash-personal', 'bkash-merchant', 'bkash-agent', 'bkash-api-tokenized',
+            'nagad-personal', 'nagad-merchant', 'nagad-agent', 'nagad-merchant-api',
+            'rocket-personal', 'rocket-merchant', 'rocket-agent',
+            'upay-personal', 'upay-merchant', 'upay-agent',
+            'cellfin-personal', 'cellfin-merchant',
+            'tap-personal', 'tap-merchant', 'tap-agent',
+            'ipay-personal', 'ipay-merchant',
+            'mcash-personal', 'mcash-merchant', 'mcash-agent',
+            'okwallet-personal', 'okwallet-merchant', 'okwallet-agent',
+            'pathaopay-personal', 'pathaopay-merchant', 'pathaopay-merchant-api',
+            'telecash-personal', 'telecash-merchant', 'telecash-agent'
+        ];
+
+        if (in_array($senderKey, $knownMfsKeys, true) || in_array($slug, $knownMfsSlugs, true)) {
+            return 'mobile_banking';
+        }
+
+        return 'cards';
+    }
+
     function pp_gateway_render($gateway_id = '', $data = []){
         global $db_prefix;
 

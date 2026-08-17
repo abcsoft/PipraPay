@@ -660,14 +660,44 @@
 
         public function renderCheckout($data = [])
         {
-            if($data['transaction']['status'] == "initiated"){
-                if(isset($_GET['gateway'])){
-                    include(__DIR__.'/gateway.php');
-                }else{
-                    include(__DIR__.'/checkout.php');
+            $brandId = $data['brand']['id'] ?? ($data['transaction']['brandId'] ?? 'both');
+            $designSlug = function_exists('get_env') ? get_env('payment_page_design', $brandId) : 'default';
+
+            if (empty($designSlug) || $designSlug === '--' || !preg_match('/^[a-zA-Z0-9_-]+$/', $designSlug)) {
+                $designSlug = 'default';
+            }
+
+            $designsBase = __DIR__ . '/../../../pp-payment-designs/';
+            $targetDir = $designsBase . $designSlug;
+
+            if (!is_dir($targetDir)) {
+                $targetDir = $designsBase . 'default';
+            }
+
+            $file = 'checkout.php';
+            if (($data['transaction']['status'] ?? '') == "initiated") {
+                if (isset($_GET['gateway'])) {
+                    $file = 'gateway.php';
+                } else {
+                    $file = 'checkout.php';
                 }
-            }else{
-                include(__DIR__.'/checkout-status.php');
+            } else {
+                $file = 'checkout-status.php';
+            }
+
+            if (file_exists($targetDir . '/' . $file)) {
+                include($targetDir . '/' . $file);
+                return;
+            }
+
+            if (file_exists($designsBase . 'default/' . $file)) {
+                include($designsBase . 'default/' . $file);
+                return;
+            }
+
+            if (file_exists(__DIR__ . '/' . $file)) {
+                include(__DIR__ . '/' . $file);
+                return;
             }
         }
 

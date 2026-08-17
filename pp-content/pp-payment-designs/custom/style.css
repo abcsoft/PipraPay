@@ -1,0 +1,1055 @@
+/*
+ * CUSTOM PAYMENT DESIGN
+ * Replace presentation styles here.
+ * Do not move payment business logic into this template.
+ */
+
+.pp-payment-custom {
+    min-height: 100vh;
+    background-color: #f1f5f9;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: #1e293b;
+    padding: 20px 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+}
+
+.pp-payment-custom * {
+    box-sizing: border-box;
+}
+
+.pp-payment-custom .custom-card-wrap {
+    max-width: 440px;
+    width: 100%;
+    margin: 0 auto;
+}
+
+.pp-payment-custom .custom-card {
+    background: #ffffff;
+    border-radius: 20px;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 12px 32px -4px rgba(15, 23, 42, 0.08), 0 4px 12px -2px rgba(15, 23, 42, 0.03);
+    overflow: hidden;
+    position: relative;
+}
+
+/* Screen 1: Header */
+.pp-payment-custom .custom-header {
+    padding: 20px 18px 14px;
+    text-align: center;
+    position: relative;
+}
+
+.pp-payment-custom .close-btn {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #f1f5f9;
+    color: #64748b;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s ease;
+    text-decoration: none;
+}
+
+.pp-payment-custom .close-btn:hover {
+    background: #e2e8f0;
+    color: #0f172a;
+}
+
+.pp-payment-custom .company-logo {
+    width: 50px;
+    height: 50px;
+    object-fit: cover;
+    border-radius: 50%;
+    margin-bottom: 6px;
+    border: 2px solid #f1f5f9;
+}
+
+.pp-payment-custom .company-name {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #0f172a;
+    margin: 0 0 6px 0;
+}
+
+.pp-payment-custom .view-details-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 12px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #64748b;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+}
+
+.pp-payment-custom .view-details-pill:hover {
+    background: #e2e8f0;
+    color: #334155;
+}
+
+.pp-payment-custom .view-details-pill .chevron-icon {
+    transition: transform 0.2s ease;
+}
+
+.pp-payment-custom .view-details-pill.expanded .chevron-icon {
+    transform: rotate(180deg);
+}
+
+/* In-Card Expandable Transaction Details Accordion Drawer */
+.pp-payment-custom .custom-details-drawer {
+    margin: 0 18px 14px;
+    border-radius: 12px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    padding: 10px 14px;
+    animation: ppSlideDown 0.2s ease-out;
+}
+
+@keyframes ppSlideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-4px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.pp-payment-custom .details-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 0;
+    font-size: 0.8125rem;
+    color: #64748b;
+}
+
+.pp-payment-custom .details-label {
+    font-weight: 500;
+}
+
+.pp-payment-custom .details-value {
+    font-weight: 600;
+    color: #1e293b;
+}
+
+.pp-payment-custom .details-row-total {
+    margin-top: 5px;
+    padding-top: 5px;
+    border-top: 1px dashed #cbd5e1;
+    font-size: 0.875rem;
+    color: #0f172a;
+    font-weight: 700;
+}
+
+.pp-payment-custom .details-row-total .details-value {
+    font-weight: 800;
+    color: #4f46e5;
+}
+
+/* Modern Shared Navbar Container */
+.pp-payment-custom .category-tabs {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 4px;
+    margin: 0 18px 16px;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+}
+
+/* Modern Nav-Pill Button */
+.pp-payment-custom .category-tab-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    color: #64748b;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    text-align: center;
+    transition: all 0.18s ease;
+    user-select: none;
+    white-space: nowrap;
+    line-height: 1.2;
+}
+
+.pp-payment-custom .category-tab-btn svg.category-icon {
+    width: 16px;
+    height: 16px;
+    stroke: currentColor;
+    stroke-width: 2;
+    flex-shrink: 0;
+    transition: all 0.18s ease;
+}
+
+.pp-payment-custom .category-tab-btn:hover {
+    background: rgba(255, 255, 255, 0.85);
+    color: #4f46e5;
+}
+
+.pp-payment-custom .category-tab-btn.active {
+    background: #4f46e5;
+    color: #ffffff;
+    font-weight: 700;
+    box-shadow: 0 2px 8px rgba(79, 70, 229, 0.25);
+}
+
+.pp-payment-custom .category-tab-btn.active svg.category-icon {
+    stroke: #ffffff;
+}
+
+/* Responsive Mobile Navigation */
+@media (max-width: 400px) {
+    .pp-payment-custom .category-tabs {
+        margin: 0 12px 14px;
+        padding: 3px;
+        gap: 3px;
+    }
+    .pp-payment-custom .category-tab-btn {
+        padding: 7px 5px;
+        font-size: 0.75rem;
+        gap: 4px;
+    }
+    .pp-payment-custom .category-tab-btn svg.category-icon {
+        width: 15px;
+        height: 15px;
+    }
+}
+
+@media (max-width: 350px) {
+    .pp-payment-custom .category-tab-btn {
+        padding: 6px 3px;
+        font-size: 0.7rem;
+        gap: 3px;
+    }
+    .pp-payment-custom .category-tab-btn svg.category-icon {
+        width: 14px;
+        height: 14px;
+    }
+}
+
+/* Gateway Grid Area */
+.pp-payment-custom .gateway-grid-wrap {
+    padding: 0 18px 16px;
+}
+
+.pp-payment-custom .gateway-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+}
+
+@media (min-width: 440px) {
+    .pp-payment-custom .gateway-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+/* Polished Modern Gateway Card */
+.pp-payment-custom .gateway-card {
+    background: #ffffff;
+    border: 1.5px solid #e2e8f0;
+    border-radius: 13px;
+    padding: 12px 8px 10px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 82px;
+    position: relative;
+    user-select: none;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+}
+
+.pp-payment-custom .gateway-card:hover {
+    border-color: #818cf8;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 14px rgba(79, 70, 229, 0.08);
+}
+
+.pp-payment-custom .gateway-card.selected {
+    border-color: #4f46e5;
+    background: #f5f3ff;
+    box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.2);
+}
+
+.pp-payment-custom .gateway-logo-wrap {
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 4px;
+}
+
+.pp-payment-custom .gateway-card img {
+    max-width: 85px;
+    max-height: 36px;
+    object-fit: contain;
+}
+
+.pp-payment-custom .gateway-card .gateway-name {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #475569;
+    margin: 0;
+}
+
+/* Pay Button */
+.pp-payment-custom .pay-action-wrap {
+    padding: 0 18px 20px;
+}
+
+.pp-payment-custom .pay-submit-btn {
+    width: 100%;
+    padding: 13px 18px;
+    border-radius: 13px;
+    background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
+    color: #ffffff;
+    border: none;
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: all 0.18s ease;
+    box-shadow: 0 4px 14px rgba(79, 70, 229, 0.3);
+    text-decoration: none;
+}
+
+.pp-payment-custom .pay-submit-btn:hover {
+    background: linear-gradient(135deg, #4338ca 0%, #4f46e5 100%);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(79, 70, 229, 0.38);
+    color: #ffffff;
+}
+
+.pp-payment-custom .pay-submit-btn:disabled {
+    background: #cbd5e1;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+/* ========================================================
+   SCREEN 2 & 3: GATEWAY BRANDED THEMES
+   ======================================================== */
+
+.pp-payment-custom .gateway-branded-panel {
+    border-radius: 16px;
+    overflow: hidden;
+    color: #ffffff;
+    padding: 24px 20px 20px;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15);
+}
+
+/* bKash Theme */
+.pp-payment-custom .theme-bkash {
+    background: linear-gradient(135deg, #E2136E 0%, #D12053 100%);
+    color: #ffffff;
+}
+
+/* Rocket Theme */
+.pp-payment-custom .theme-rocket {
+    background: linear-gradient(135deg, #8C3494 0%, #6A1B9A 100%);
+    color: #ffffff;
+}
+
+/* Upay Theme */
+.pp-payment-custom .theme-upay {
+    background: #FFD200;
+    color: #18181B;
+}
+.pp-payment-custom .theme-upay .branded-text-muted {
+    color: #52525b !important;
+}
+.pp-payment-custom .theme-upay .branded-box {
+    background: #ffffff !important;
+    color: #18181B !important;
+}
+.pp-payment-custom .theme-upay .branded-input {
+    background: #ffffff !important;
+    color: #18181B !important;
+    border-color: #e4e4e7 !important;
+}
+.pp-payment-custom .theme-upay .branded-btn-primary {
+    background: #18181B !important;
+    color: #ffffff !important;
+}
+
+/* Default Branded Fallback */
+.pp-payment-custom .theme-default {
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    color: #ffffff;
+}
+
+/* Generic Branded Header */
+.pp-payment-custom .branded-header {
+    text-align: center;
+    margin-bottom: 20px;
+    position: relative;
+}
+
+.pp-payment-custom .branded-logo-box {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #ffffff;
+    padding: 8px 18px;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    margin-bottom: 16px;
+}
+
+.pp-payment-custom .branded-logo-box img {
+    max-height: 44px;
+    max-width: 120px;
+    object-fit: contain;
+}
+
+/* Generic Summary Card */
+.pp-payment-custom .invoice-summary-card {
+    background: rgba(255, 255, 255, 0.15);
+    backdrop-filter: blur(10px);
+    border-radius: 14px;
+    padding: 14px 16px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.pp-payment-custom .invoice-summary-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    text-align: left;
+}
+
+.pp-payment-custom .invoice-summary-amount {
+    font-size: 1.375rem;
+    font-weight: 800;
+    text-align: right;
+    letter-spacing: -0.02em;
+}
+
+/* Generic Payer Input Section */
+.pp-payment-custom .payer-input-section {
+    text-align: center;
+    padding: 10px 0 20px;
+}
+
+.pp-payment-custom .payer-label {
+    font-size: 1rem;
+    font-weight: 700;
+    margin-bottom: 12px;
+}
+
+.pp-payment-custom .payer-input {
+    width: 100%;
+    padding: 14px 16px;
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-align: center;
+    border-radius: 12px;
+    border: 2px solid rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.95);
+    color: #0f172a;
+    outline: none;
+    transition: all 0.2s ease;
+    margin-bottom: 12px;
+}
+
+.pp-payment-custom .payer-input:focus {
+    background: #ffffff;
+    border-color: #ffffff;
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.3);
+}
+
+.pp-payment-custom .payer-terms {
+    font-size: 0.8125rem;
+    opacity: 0.85;
+    margin-bottom: 20px;
+}
+
+/* Generic Branded Actions */
+.pp-payment-custom .branded-actions {
+    display: flex;
+    gap: 12px;
+}
+
+.pp-payment-custom .branded-btn {
+    flex: 1;
+    padding: 12px 16px;
+    border-radius: 12px;
+    font-size: 0.9375rem;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    transition: all 0.2s ease;
+    text-decoration: none;
+    border: none;
+}
+
+.pp-payment-custom .branded-btn-secondary {
+    background: rgba(255, 255, 255, 0.2);
+    color: inherit;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.pp-payment-custom .branded-btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+.pp-payment-custom .branded-btn-primary {
+    background: #ffffff;
+    color: #0f172a;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.pp-payment-custom .branded-btn-primary:hover {
+    background: #f8fafc;
+    transform: translateY(-1px);
+}
+
+.pp-payment-custom .branded-btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* Generic Instruction & Waiting */
+.pp-payment-custom .instruction-card {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 14px;
+    padding: 16px;
+    margin-bottom: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.pp-payment-custom .instruction-steps {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 12px 0;
+    font-size: 0.9375rem;
+    line-height: 1.6;
+}
+
+.pp-payment-custom .instruction-steps li {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.pp-payment-custom .instruction-artwork {
+    width: 100%;
+    max-height: 120px;
+    border-radius: 10px;
+    margin: 10px 0 14px;
+    display: block;
+}
+
+.pp-payment-custom .merchant-number-box {
+    background: rgba(255, 255, 255, 0.95);
+    color: #0f172a;
+    border-radius: 12px;
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+.pp-payment-custom .merchant-number-text {
+    font-size: 1.1875rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    font-family: monospace;
+}
+
+.pp-payment-custom .copy-btn {
+    background: #0f172a;
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-size: 0.8125rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.pp-payment-custom .copy-btn:hover {
+    background: #334155;
+}
+
+.pp-payment-custom .waiting-status-box {
+    text-align: center;
+    padding: 14px 0 8px;
+}
+
+.pp-payment-custom .waiting-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9375rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+}
+
+.pp-payment-custom .countdown-pill {
+    display: inline-block;
+    padding: 4px 14px;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, 0.2);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+/* ========================================================
+   NAGAD PERSONAL DEDICATED REFERENCE LAYOUT
+   ======================================================== */
+.pp-payment-custom .theme-nagad {
+    background: #8A0F14;
+    color: #ffffff;
+    border-radius: 16px;
+    padding: 24px 20px 20px;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.2);
+}
+
+.pp-payment-custom .theme-nagad .nagad-top-header {
+    text-align: center;
+    margin-bottom: 16px;
+}
+
+.pp-payment-custom .theme-nagad .nagad-cart-icon {
+    width: 36px;
+    height: 36px;
+    stroke: #ffffff;
+    stroke-width: 2;
+    fill: none;
+    margin: 0 auto 6px;
+    display: block;
+}
+
+.pp-payment-custom .theme-nagad .nagad-company-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #ffffff;
+    margin: 0;
+    letter-spacing: -0.01em;
+}
+
+/* Inset Summary Table */
+.pp-payment-custom .theme-nagad .nagad-summary-box {
+    background: #680A0E;
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 22px;
+}
+
+.pp-payment-custom .theme-nagad .nagad-summary-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 0;
+    font-size: 0.875rem;
+}
+
+.pp-payment-custom .theme-nagad .nagad-summary-label {
+    color: rgba(255, 255, 255, 0.9);
+    font-weight: 600;
+}
+
+.pp-payment-custom .theme-nagad .nagad-summary-val {
+    color: #ffffff;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+}
+
+/* Section Title */
+.pp-payment-custom .theme-nagad .nagad-account-title {
+    text-align: center;
+    font-size: 1rem;
+    font-weight: 700;
+    color: #ffffff;
+    margin-bottom: 16px;
+}
+
+/* Segmented Mobile Number Input */
+.pp-payment-custom .theme-nagad .nagad-input-container {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    margin-bottom: 18px;
+}
+
+.pp-payment-custom .theme-nagad .nagad-hidden-input {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+    font-size: 16px;
+    z-index: 10;
+}
+
+.pp-payment-custom .theme-nagad .nagad-digit-group-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+}
+
+.pp-payment-custom .theme-nagad .nagad-digit-group {
+    display: flex;
+    gap: 4px;
+}
+
+.pp-payment-custom .theme-nagad .nagad-digit-dash {
+    color: #ffffff;
+    font-weight: 800;
+    font-size: 1.125rem;
+    padding: 0 2px;
+}
+
+.pp-payment-custom .theme-nagad .nagad-digit-box {
+    width: 24px;
+    height: 34px;
+    background: #ffffff;
+    border-radius: 6px;
+    color: #0f172a;
+    font-weight: 700;
+    font-size: 1.1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid transparent;
+    transition: all 0.15s ease;
+}
+
+@media (min-width: 390px) {
+    .pp-payment-custom .theme-nagad .nagad-digit-box {
+        width: 27px;
+        height: 38px;
+        font-size: 1.2rem;
+    }
+}
+
+.pp-payment-custom .theme-nagad .nagad-digit-box.active {
+    border-color: #F59E0B;
+    box-shadow: 0 0 0 1px #F59E0B;
+}
+
+/* Terms Notice */
+.pp-payment-custom .theme-nagad .nagad-terms-text {
+    font-size: 0.78rem;
+    text-align: center;
+    color: #ffffff;
+    opacity: 0.95;
+    margin-bottom: 22px;
+    line-height: 1.4;
+}
+
+.pp-payment-custom .theme-nagad .nagad-terms-text a,
+.pp-payment-custom .theme-nagad .nagad-terms-text u {
+    color: #ffffff;
+    font-weight: 600;
+}
+
+/* Actions Row */
+.pp-payment-custom .theme-nagad .nagad-actions-row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 24px;
+}
+
+.pp-payment-custom .theme-nagad .nagad-btn-proceed {
+    flex: 1;
+    padding: 13px 10px;
+    border-radius: 10px;
+    border: none;
+    font-size: 0.9375rem;
+    font-weight: 700;
+    text-align: center;
+    transition: all 0.2s ease;
+    background: #C8CED8;
+    color: #8A94A6;
+    cursor: not-allowed;
+}
+
+.pp-payment-custom .theme-nagad .nagad-btn-proceed.enabled {
+    background: #ffffff;
+    color: #8B1116;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.pp-payment-custom .theme-nagad .nagad-btn-proceed.enabled:hover {
+    background: #f8fafc;
+}
+
+.pp-payment-custom .theme-nagad .nagad-btn-close {
+    flex: 1;
+    padding: 13px 10px;
+    border-radius: 10px;
+    border: none;
+    background: #ffffff;
+    color: #8B1116;
+    font-size: 0.9375rem;
+    font-weight: 700;
+    text-align: center;
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.pp-payment-custom .theme-nagad .nagad-btn-close:hover {
+    background: #f8fafc;
+}
+
+/* Nagad Footer */
+.pp-payment-custom .theme-nagad .nagad-footer-brand {
+    text-align: center;
+    padding-top: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    color: #ffffff;
+    font-size: 0.9rem;
+    font-weight: 700;
+}
+
+/* Screen 3: Nagad Instruction & Waiting */
+.pp-payment-custom .theme-nagad .nagad-inst-panel {
+    background: #5A070B;
+    border-radius: 12px;
+    padding: 18px 16px;
+    margin-bottom: 20px;
+    border-top: 1px dotted rgba(255, 255, 255, 0.25);
+    text-align: center;
+}
+
+.pp-payment-custom .theme-nagad .nagad-inst-step-1 {
+    font-size: 0.9375rem;
+    color: #ffffff;
+    margin-bottom: 4px;
+    font-weight: 600;
+}
+
+.pp-payment-custom .theme-nagad .nagad-inst-step-2 {
+    font-size: 1rem;
+    font-weight: 800;
+    color: #ffffff;
+    margin-bottom: 14px;
+}
+
+.pp-payment-custom .theme-nagad .nagad-inst-artwork {
+    width: 100%;
+    max-height: 125px;
+    border-radius: 10px;
+    margin-bottom: 16px;
+    display: block;
+}
+
+.pp-payment-custom .theme-nagad .nagad-inst-label {
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: #ffffff;
+    margin-bottom: 8px;
+}
+
+.pp-payment-custom .theme-nagad .nagad-merchant-pill {
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: 10px;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.pp-payment-custom .theme-nagad .nagad-merchant-num {
+    font-size: 1.25rem;
+    font-weight: 800;
+    color: #ffffff;
+    letter-spacing: 0.05em;
+    font-family: monospace;
+}
+
+.pp-payment-custom .theme-nagad .nagad-copy-btn {
+    background: rgba(255, 255, 255, 0.25);
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-size: 0.8125rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.pp-payment-custom .theme-nagad .nagad-copy-btn:hover {
+    background: rgba(255, 255, 255, 0.4);
+}
+
+.pp-payment-custom .theme-nagad .nagad-amount-box {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-bottom: 16px;
+    font-size: 0.9375rem;
+    font-weight: 700;
+    color: #ffffff;
+}
+
+.pp-payment-custom .theme-nagad .nagad-amount-pill {
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: 8px;
+    padding: 4px 14px;
+    font-size: 1.125rem;
+    font-weight: 800;
+    color: #ffffff;
+}
+
+.pp-payment-custom .theme-nagad .nagad-waiting-text {
+    font-size: 1rem;
+    font-weight: 700;
+    color: #ffffff;
+    margin-bottom: 10px;
+}
+
+.pp-payment-custom .theme-nagad .nagad-countdown-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: 20px;
+    padding: 6px 18px;
+    font-size: 0.8125rem;
+    font-weight: 700;
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.pp-payment-custom .theme-nagad .nagad-btn-autoverify {
+    flex: 1;
+    padding: 13px 10px;
+    border-radius: 10px;
+    border: none;
+    background: #E88300;
+    color: #ffffff;
+    font-size: 0.9375rem;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: all 0.2s ease;
+    box-shadow: 0 4px 12px rgba(232, 131, 0, 0.3);
+}
+
+.pp-payment-custom .theme-nagad .nagad-btn-autoverify:hover {
+    background: #f59e0b;
+}
+
+.pp-payment-custom .theme-nagad .nagad-btn-back {
+    flex: 1;
+    padding: 13px 10px;
+    border-radius: 10px;
+    background: transparent;
+    border: 2px solid #ffffff;
+    color: #ffffff;
+    font-size: 0.9375rem;
+    font-weight: 700;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.2s ease;
+}
+
+.pp-payment-custom .theme-nagad .nagad-btn-back:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+/* Spinner Pulse */
+.pp-payment-custom .pulse-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background-color: #22c55e;
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+    animation: ppPulse 1.5s infinite;
+}
+
+@keyframes ppPulse {
+    0% {
+        transform: scale(0.95);
+        box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+    }
+    70% {
+        transform: scale(1);
+        box-shadow: 0 0 0 8px rgba(34, 197, 94, 0);
+    }
+    100% {
+        transform: scale(0.95);
+        box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+    }
+}
+
+/* Footer branding */
+.pp-payment-custom .custom-footer {
+    text-align: center;
+    margin-top: 20px;
+    font-size: 0.75rem;
+    color: #94a3b8;
+}

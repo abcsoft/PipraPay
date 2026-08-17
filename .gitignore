@@ -3,3 +3,5 @@ pp-config.php
 *.log
 backups/
 pp-media/storage/
+scratch/
+*.sql
