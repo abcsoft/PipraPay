@@ -3073,7 +3073,7 @@
                 if ($txnCurrency === $row['currency']) {
                     $convertedAmount = $txnAmount;
                 } else {
-                    if (isset($currencyRates[$row['currency']])) {
+                    if (isset($currencyRates[$row['currency']]) && bccomp((string)$currencyRates[$row['currency']], '0', 8) > 0) {
                         $convertedAmount = money_div($txnAmount, $currencyRates[$row['currency']]);
                     } else {
                         $convertedAmount = "0";
@@ -3100,6 +3100,9 @@
                 $hasNoMax = bccomp($max, '0', 2) <= 0 || $max === '' || $max === '--';
 
                 $isAboveMin = bccomp(money_sanitize(money_round($convertedAmount)), $min, 2) >= 0;
+                if (bccomp($txnAmount, '0', 2) > 0 && bccomp(money_sanitize(money_round($convertedAmount)), '0', 2) <= 0) {
+                    $isAboveMin = false;
+                }
                 $isBelowMax = $hasNoMax ? true : (bccomp(money_sanitize(money_round($convertedAmount)), $max, 2) <= 0);
 
                 if ($isAboveMin && $isBelowMax) {
@@ -3161,7 +3164,7 @@
             if ($txnCurrency === $row['currency']) {
                 $convertedAmount = $txnAmount;
             } else {
-                if (isset($currencyRates[$row['currency']])) {
+                if (isset($currencyRates[$row['currency']]) && bccomp((string)$currencyRates[$row['currency']], '0', 8) > 0) {
                     $convertedAmount = money_div($txnAmount, $currencyRates[$row['currency']]);
                 } else {
                     $convertedAmount = "0";
@@ -3188,6 +3191,9 @@
             $hasNoMax = bccomp($max, '0', 2) <= 0 || $max === '' || $max === '--';
 
             $isAboveMin = bccomp(money_sanitize(money_round($convertedAmount)), $min, 2) >= 0;
+            if (bccomp($txnAmount, '0', 2) > 0 && bccomp(money_sanitize(money_round($convertedAmount)), '0', 2) <= 0) {
+                $isAboveMin = false;
+            }
             $isBelowMax = $hasNoMax ? true : (bccomp(money_sanitize(money_round($convertedAmount)), $max, 2) <= 0);
 
             if ($isAboveMin && $isBelowMax) {
@@ -3460,13 +3466,19 @@
             return ['status' => 'false', 'message' => 'Brand mismatch for this transaction.'];
         }
 
-        $paramsGw = [':gateway_id' => $gatewayId, ':brand_id' => $actualBrandId];
-        $gwRes = json_decode(getData($db_prefix_str . 'gateways', 'WHERE gateway_id = :gateway_id AND brand_id = :brand_id AND status = "active"', '* FROM', $paramsGw), true);
-        if (empty($gwRes['status']) || empty($gwRes['response'])) {
-            return ['status' => 'false', 'message' => 'Invalid or inactive gateway for this brand.'];
+        // Full gateway eligibility with authoritative transaction amount/currency
+        $gatewayInfo = pp_gateway_info($gatewayId, [
+            'brand' => ['id' => $actualBrandId],
+            'transaction' => [
+                'amount' => $txRow['amount'],
+                'currency' => $txRow['currency']
+            ]
+        ]);
+        if (empty($gatewayInfo['status']) || $gatewayInfo['status'] === false) {
+            return ['status' => 'false', 'message' => 'Gateway is not available for this transaction amount or currency.'];
         }
 
-        $gatewayInfo = pp_gateway_info($gatewayId, ['brand' => ['id' => $actualBrandId]]);
+        // Classify as Personal using authoritative gateway metadata
         $personalMeta = pp_is_personal_mobile_banking_gateway($gatewayInfo);
         if (!$personalMeta) {
             return ['status' => 'false', 'message' => 'Gateway does not support personal auto-verification.'];
