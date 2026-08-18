@@ -3556,19 +3556,45 @@
 
             $pdo->commit();
 
+            error_log(sprintf('[Custom Payment] CUSTOM_PAYMENT_SESSION_STARTED | Session: %d | Ref: %s | Brand: %s | Gateway: %s | Payer: %s', $sessionId, $txRef, $actualBrandId, $gatewayId, pp_mask_phone_number($normalizedNumber)));
+
+            // Post-session-start reconciliation: catch SMS that arrived before session was created
+            $reconResult = pp_reconcile_personal_payment_session($sessionId);
+            if (!empty($reconResult['matched'])) {
+                // Session was completed by reconciliation — return completed status
+                $returnUrl = pp_checkout_address($txRef);
+                $txCheck = json_decode(getData($db_prefix_str . 'transaction', 'WHERE ref = :ref', '* FROM', [':ref' => $txRef]), true);
+                if (!empty($txCheck['response'][0]['return_url']) && $txCheck['response'][0]['return_url'] !== '--') {
+                    $returnUrl = addQueryParams($txCheck['response'][0]['return_url'], ['pp_status' => 'completed', 'transaction_ref' => $txRef]);
+                }
+                return [
+                    'status'         => 'true',
+                    'session_exists' => true,
+                    'session_id'     => $sessionId,
+                    'payment_status' => 'completed',
+                    'expires_in'     => 0,
+                    'redirect_url'   => $returnUrl,
+                    'return_url'     => $returnUrl,
+                    'payer_number'   => $normalizedNumber,
+                    'trx_id'         => $reconResult['trx_id'] ?? '',
+                ];
+            }
+
             return [
-                'status'       => 'true',
-                'session_id'   => $sessionId,
-                'expires_in'   => 300,
-                'expires_at'   => $expiresAt,
-                'payer_number' => $normalizedNumber,
+                'status'         => 'true',
+                'session_exists' => true,
+                'session_id'     => $sessionId,
+                'payment_status' => 'waiting',
+                'expires_in'     => 300,
+                'expires_at'     => $expiresAt,
+                'payer_number'   => $normalizedNumber,
             ];
         } catch (Throwable $e) {
             if (isset($pdo) && $pdo->inTransaction()) {
                 $pdo->rollBack();
             }
-            error_log("Failed to create personal payment session: " . $e->getMessage());
-            return ['status' => 'false', 'message' => 'Unable to initialize waiting session. Please try again.'];
+            error_log(sprintf('[Custom Payment] CUSTOM_PAYMENT_SESSION_START_FAILED | Ref: %s | Error: %s', $txRef, $e->getMessage()));
+            return ['status' => 'false', 'session_exists' => false, 'message' => 'Unable to initialize waiting session. Please try again.'];
         }
     }
 
@@ -3608,6 +3634,7 @@
 
             return [
                 'status'         => 'true',
+                'session_exists' => true,
                 'payment_status' => 'completed',
                 'redirect_url'   => $returnUrl,
                 'return_url'     => $returnUrl,
@@ -3618,6 +3645,7 @@
         if ($txStatus === 'canceled' || $txStatus === 'refunded') {
             return [
                 'status'         => 'true',
+                'session_exists' => false,
                 'payment_status' => $txStatus,
                 'redirect_url'   => $returnUrl,
                 'return_url'     => $returnUrl
@@ -3629,7 +3657,8 @@
         if (empty($sessRes['status']) || empty($sessRes['response'])) {
             return [
                 'status'         => 'true',
-                'payment_status' => ($txStatus === 'initiated') ? 'waiting' : $txStatus,
+                'session_exists' => false,
+                'payment_status' => ($txStatus === 'initiated') ? 'not_started' : $txStatus,
                 'redirect_url'   => $returnUrl,
                 'return_url'     => $returnUrl
             ];
@@ -3641,6 +3670,7 @@
         if ($sessStatus === 'completed') {
             return [
                 'status'         => 'true',
+                'session_exists' => true,
                 'payment_status' => 'completed',
                 'redirect_url'   => $returnUrl,
                 'return_url'     => $returnUrl,
@@ -3657,10 +3687,12 @@
                     $pdo = connectDatabase();
                     $pdo->prepare("UPDATE `{$db_prefix_str}personal_payment_sessions` SET `status` = 'expired', `updated_date` = :now WHERE `id` = :id AND `status` = 'waiting'")
                         ->execute([':now' => getCurrentDatetime('Y-m-d H:i:s'), ':id' => $session['id']]);
+                    error_log(sprintf('[Custom Payment] CUSTOM_PAYMENT_SESSION_EXPIRED | Session: %s | Ref: %s', $session['id'], $txRef));
                 } catch (Throwable $e) {}
             }
             return [
                 'status'         => 'true',
+                'session_exists' => true,
                 'payment_status' => 'expired',
                 'expires_in'     => 0
             ];
@@ -3669,10 +3701,154 @@
         $remainingSeconds = max(0, $expireTs - $nowTs);
         return [
             'status'         => 'true',
+            'session_exists' => true,
             'payment_status' => 'waiting',
             'expires_in'     => $remainingSeconds,
             'payer_number'   => $session['payer_number'] ?? ''
         ];
+    }
+
+    /**
+     * Reconcile a personal payment session against recent eligible SMS records.
+     * Handles the SMS-before-session race condition by searching for matching SMS
+     * that arrived within a lookback window and calling the canonical matcher.
+     *
+     * @param int $sessionId  The personal_payment_sessions.id to reconcile
+     * @return array  ['matched' => bool, 'trx_id' => string, 'sms_id' => int|null, ...]
+     */
+    function pp_reconcile_personal_payment_session(int $sessionId): array {
+        global $db_prefix;
+        $db_prefix_str = !empty($db_prefix) ? $db_prefix : 'pp_';
+
+        try {
+            $pdo = connectDatabase();
+
+            // Load the session
+            $stmtSess = $pdo->prepare("SELECT * FROM `{$db_prefix_str}personal_payment_sessions` WHERE `id` = :id");
+            $stmtSess->execute([':id' => $sessionId]);
+            $session = $stmtSess->fetch(PDO::FETCH_ASSOC);
+
+            if (!$session) {
+                return ['matched' => false, 'reason' => 'Session not found'];
+            }
+
+            if ($session['status'] !== 'waiting') {
+                if ($session['status'] === 'completed') {
+                    error_log(sprintf('[Custom Payment] CUSTOM_PAYMENT_ALREADY_COMPLETED | Session: %d | Ref: %s', $sessionId, $session['transaction_ref']));
+                    return ['matched' => false, 'reason' => 'Session already completed'];
+                }
+                return ['matched' => false, 'reason' => 'Session status is: ' . $session['status']];
+            }
+
+            // Check if session has expired
+            $nowTs = time();
+            $expireTs = !empty($session['expires_at']) ? strtotime($session['expires_at']) : 0;
+            if ($expireTs > 0 && $expireTs <= $nowTs) {
+                return ['matched' => false, 'reason' => 'Session expired'];
+            }
+
+            $senderKey = strtolower(trim($session['sender_key']));
+            $payerNumber = trim($session['payer_number']);
+            $brandId = trim($session['brand_id']);
+
+            if (empty($senderKey) || empty($payerNumber)) {
+                return ['matched' => false, 'reason' => 'Session missing sender_key or payer_number'];
+            }
+
+            // Search for recent eligible SMS records (10-minute lookback window)
+            $lookbackTime = date('Y-m-d H:i:s', $nowTs - 600);
+            $stmtSms = $pdo->prepare("SELECT s.id
+                FROM `{$db_prefix_str}sms_data` s
+                LEFT JOIN `{$db_prefix_str}device` d ON d.device_id = s.device_id
+                WHERE s.sender_key = :sender_key
+                  AND s.number = :payer_number
+                  AND s.status = 'approved'
+                  AND s.type = 'Personal'
+                  AND s.created_date >= :lookback
+                  " . (!empty($brandId) && $brandId !== '--' ? "AND (d.brand_id = :brand_id OR d.brand_id IS NULL OR d.brand_id = '--')" : "") . "
+                ORDER BY s.id DESC
+                LIMIT 5");
+
+            $smsParams = [
+                ':sender_key'   => $senderKey,
+                ':payer_number' => $payerNumber,
+                ':lookback'     => $lookbackTime,
+            ];
+            if (!empty($brandId) && $brandId !== '--') {
+                $smsParams[':brand_id'] = $brandId;
+            }
+            $stmtSms->execute($smsParams);
+            $candidateSmsRows = $stmtSms->fetchAll(PDO::FETCH_ASSOC);
+
+            if (empty($candidateSmsRows)) {
+                error_log(sprintf('[Custom Payment] CUSTOM_PAYMENT_SMS_NO_MATCH | Session: %d | Ref: %s | Reason: No eligible SMS found in lookback window', $sessionId, $session['transaction_ref']));
+                return ['matched' => false, 'reason' => 'No eligible SMS found'];
+            }
+
+            // Try each candidate SMS through the canonical matcher
+            foreach ($candidateSmsRows as $smsCandidate) {
+                $matchResult = pp_process_personal_payment_sms((int)$smsCandidate['id']);
+                if (!empty($matchResult['matched'])) {
+                    error_log(sprintf('[Custom Payment] CUSTOM_PAYMENT_RECONCILIATION_MATCHED | Session: %d | Ref: %s | SMS: %d | TrxID: %s',
+                        $sessionId, $session['transaction_ref'], (int)$smsCandidate['id'], $matchResult['trx_id'] ?? 'N/A'));
+                    return [
+                        'matched'         => true,
+                        'transaction_ref' => $matchResult['transaction_ref'] ?? $session['transaction_ref'],
+                        'trx_id'          => $matchResult['trx_id'] ?? '',
+                        'sms_id'          => (int)$smsCandidate['id'],
+                    ];
+                }
+            }
+
+            error_log(sprintf('[Custom Payment] CUSTOM_PAYMENT_RECONCILIATION_NO_MATCH | Session: %d | Ref: %s | Candidates: %d',
+                $sessionId, $session['transaction_ref'], count($candidateSmsRows)));
+            return ['matched' => false, 'reason' => 'No candidate SMS matched amount/tolerance'];
+        } catch (Throwable $e) {
+            error_log(sprintf('[Custom Payment] CUSTOM_PAYMENT_RECONCILIATION_ERROR | Session: %d | Error: %s', $sessionId, $e->getMessage()));
+            return ['matched' => false, 'reason' => 'Exception: ' . $e->getMessage()];
+        }
+    }
+
+    /**
+     * Server-side Auto Verification: attempt to reconcile a personal payment session
+     * for a given transaction reference and return the updated status.
+     *
+     * Called by the "Auto Verification" button and the custom-personal-payment-verify action.
+     *
+     * @param string $transactionRef  The transaction reference
+     * @return array  Status response compatible with pp_get_personal_payment_session_status format
+     */
+    function pp_verify_personal_payment_session(string $transactionRef): array {
+        global $db_prefix;
+        ensurePersonalPaymentSessionsTable();
+        $db_prefix_str = !empty($db_prefix) ? $db_prefix : 'pp_';
+
+        $txRef = trim($transactionRef);
+        if (empty($txRef)) {
+            return ['status' => 'false', 'payment_status' => 'error', 'message' => 'Missing transaction reference.'];
+        }
+
+        // Load the latest waiting session for this transaction
+        try {
+            $pdo = connectDatabase();
+            $stmtSess = $pdo->prepare("SELECT * FROM `{$db_prefix_str}personal_payment_sessions` WHERE `transaction_ref` = :ref AND `status` = 'waiting' ORDER BY `id` DESC LIMIT 1");
+            $stmtSess->execute([':ref' => $txRef]);
+            $session = $stmtSess->fetch(PDO::FETCH_ASSOC);
+
+            if (!$session) {
+                // No waiting session — return current status
+                return pp_get_personal_payment_session_status($txRef);
+            }
+
+            // Run reconciliation against recent SMS
+            $reconResult = pp_reconcile_personal_payment_session((int)$session['id']);
+
+            // Return updated status regardless of match result
+            return pp_get_personal_payment_session_status($txRef);
+        } catch (Throwable $e) {
+            error_log(sprintf('[Custom Payment] CUSTOM_PAYMENT_VERIFY_ERROR | Ref: %s | Error: %s', $txRef, $e->getMessage()));
+            return pp_get_personal_payment_session_status($txRef);
+        }
     }
 
     function pp_mask_phone_number(string $number): string {

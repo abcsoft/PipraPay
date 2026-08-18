@@ -162,8 +162,8 @@
     // Detect if an active waiting session exists or if step=waiting requested
     $activeSess = function_exists('pp_get_personal_payment_session_status') ? pp_get_personal_payment_session_status($ref) : ['status' => 'none'];
     $activePStatus = strtolower((string)($activeSess['payment_status'] ?? $activeSess['status'] ?? ''));
-    $isWaiting = ($activePStatus === 'waiting') || (isset($_GET['step']) && $_GET['step'] === 'waiting');
-    $initialExpiresIn = ($isWaiting && !empty($activeSess['expires_in'])) ? (int)$activeSess['expires_in'] : 300;
+    $isWaiting = !empty($activeSess['session_exists']) && $activePStatus === 'waiting';
+    $initialExpiresIn = ($isWaiting && !empty($activeSess['expires_in'])) ? (int)$activeSess['expires_in'] : 0;
 ?>
 
 <!DOCTYPE html>
@@ -629,6 +629,13 @@
                 }
                 if (data.status === 'true') {
                     currentSessionId = data.session_id;
+                    // If post-session reconciliation already completed the payment, redirect immediately
+                    var paymentStatus = (data.payment_status || '').toLowerCase();
+                    if (paymentStatus === 'completed') {
+                        var targetUrl = data.redirect_url || data.return_url || checkoutUrl;
+                        window.location.replace(targetUrl);
+                        return;
+                    }
                     document.getElementById('stepPayerNumber').style.display = 'none';
                     document.getElementById('stepInstructionWaiting').style.display = 'block';
                     startCountdown(data.expires_in || 300);
@@ -700,6 +707,12 @@
                     if (autoBtn) autoBtn.disabled = true;
                     var waitLbl = document.getElementById('waitingLabel');
                     if (waitLbl) waitLbl.textContent = 'Session expired. Please go back.';
+                } else if (paymentStatus === 'not_started') {
+                    // Session does not exist yet — return to payer input step
+                    stopPolling();
+                    if (countdownInterval) clearInterval(countdownInterval);
+                    document.getElementById('stepInstructionWaiting').style.display = 'none';
+                    document.getElementById('stepPayerNumber').style.display = 'block';
                 } else if (paymentStatus === 'canceled' || paymentStatus === 'refunded') {
                     stopPolling();
                     if (countdownInterval) clearInterval(countdownInterval);
@@ -773,13 +786,44 @@
                 btn.disabled = true;
                 btn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status"></span> Checking...';
             }
-            checkStatus(function(data) {
+
+            var formData = new FormData();
+            formData.append('action-v2', 'custom-personal-payment-verify');
+            formData.append('transaction-id', txRef);
+
+            fetch(checkoutUrl, {
+                method: 'POST',
+                cache: 'no-store',
+                body: formData
+            })
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
                 var paymentStatus = (data && (data.payment_status || data.status) || '').toLowerCase();
-                if (paymentStatus !== 'completed') {
+                if (paymentStatus === 'completed') {
+                    stopPolling();
+                    if (countdownInterval) clearInterval(countdownInterval);
+                    var waitLbl = document.getElementById('waitingLabel');
+                    if (waitLbl) waitLbl.textContent = 'Payment verified! Redirecting...';
+                    if (btn) {
+                        btn.disabled = true;
+                        btn.innerHTML = '<svg class="pulse-dot" style="margin-right: 4px;"></svg> Verified!';
+                    }
+                    var targetUrl = data.redirect_url || data.return_url || checkoutUrl;
+                    setTimeout(function() {
+                        window.location.replace(targetUrl);
+                    }, 500);
+                } else {
                     if (btn) {
                         btn.disabled = false;
                         btn.innerHTML = '<svg class="pulse-dot" style="margin-right: 4px;"></svg> Auto Verification';
                     }
+                }
+            })
+            .catch(function(err) {
+                console.warn('Auto verification error:', err);
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<svg class="pulse-dot" style="margin-right: 4px;"></svg> Auto Verification';
                 }
             });
         }

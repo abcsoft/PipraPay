@@ -49,7 +49,7 @@
             $txRef = $data['transaction']['ref'] ?? '';
             $sessRes = function_exists('pp_get_personal_payment_session_status') ? pp_get_personal_payment_session_status($txRef) : ['status' => 'none'];
             $pStatus = strtolower((string)($sessRes['payment_status'] ?? $sessRes['status'] ?? ''));
-            if ($pStatus === 'waiting') {
+            if ($pStatus === 'waiting' && !empty($sessRes['session_exists'])) {
                 global $db_prefix;
                 $db_prefix_str = !empty($db_prefix) ? $db_prefix : 'pp_';
                 $sessRow = json_decode(getData($db_prefix_str . 'personal_payment_sessions', 'WHERE transaction_ref = :ref ORDER BY id DESC LIMIT 1', '* FROM', [':ref' => $txRef]), true);

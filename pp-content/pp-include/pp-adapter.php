@@ -9475,15 +9475,24 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                 $sessRes = pp_create_or_update_personal_payment_session($transaction_id, $gateway_id, $normalizedNumber, $brandId);
                 if(($sessRes['status'] ?? '') === 'true'){
                     $waitingUrl = pp_checkout_address($transaction_id) . '?gateway=' . urlencode($gateway_id) . '&category=' . urlencode($category) . '&step=waiting';
-                    echo json_encode([
-                        'status'       => 'true',
-                        'title'        => 'Session Started',
-                        'message'      => 'Personal payment session initialized successfully.',
-                        'session_id'   => $sessRes['session_id'],
-                        'expires_in'   => $sessRes['expires_in'],
-                        'payer_number' => $sessRes['payer_number'],
-                        'redirect_url' => $waitingUrl
-                    ]);
+                    $responsePayload = [
+                        'status'         => 'true',
+                        'session_exists' => true,
+                        'title'          => 'Session Started',
+                        'message'        => 'Personal payment session initialized successfully.',
+                        'session_id'     => $sessRes['session_id'],
+                        'payment_status' => $sessRes['payment_status'] ?? 'waiting',
+                        'expires_in'     => $sessRes['expires_in'],
+                        'payer_number'   => $sessRes['payer_number'],
+                        'redirect_url'   => $waitingUrl
+                    ];
+                    // If post-session reconciliation already completed the payment, include redirect
+                    if (!empty($sessRes['payment_status']) && $sessRes['payment_status'] === 'completed') {
+                        $responsePayload['redirect_url'] = $sessRes['redirect_url'] ?? $sessRes['return_url'] ?? $waitingUrl;
+                        $responsePayload['return_url'] = $sessRes['return_url'] ?? $waitingUrl;
+                        $responsePayload['trx_id'] = $sessRes['trx_id'] ?? '';
+                    }
+                    echo json_encode($responsePayload);
                 }else{
                     echo json_encode([
                         'status'  => 'false',
@@ -9512,6 +9521,28 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                 }
 
                 $res = pp_get_personal_payment_session_status($transaction_id);
+                echo json_encode($res);
+                exit();
+            }
+
+            if($action == "custom-personal-payment-verify"){
+                header('Content-Type: application/json; charset=utf-8');
+                header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+                header('Pragma: no-cache');
+                header('Expires: 0');
+
+                $transaction_id = trim(escape_string($_POST['transaction-id'] ?? $_POST['ref'] ?? $_POST['transaction_ref'] ?? $_GET['transaction-id'] ?? $_GET['ref'] ?? $_GET['transaction_ref'] ?? ''));
+
+                if(empty($transaction_id)){
+                    echo json_encode([
+                        'status'         => 'false',
+                        'payment_status' => 'error',
+                        'message'        => 'Missing transaction reference.'
+                    ]);
+                    exit();
+                }
+
+                $res = pp_verify_personal_payment_session($transaction_id);
                 echo json_encode($res);
                 exit();
             }
