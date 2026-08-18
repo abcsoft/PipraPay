@@ -9437,7 +9437,23 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                 $txRow = $response_transaction['response'][0];
                 $brandId = $txRow['brand_id'];
 
-                // Full gateway eligibility check with authoritative transaction amount/currency
+                // A. CLASSIFICATION — Load authoritative gateway from DB (no amount dependency)
+                $gwParams = [':gateway_id' => $gateway_id, ':brand_id' => $brandId];
+                $gwRes = json_decode(getData($db_prefix.'gateways', 'WHERE gateway_id = :gateway_id AND brand_id = :brand_id AND status = "active"', '* FROM', $gwParams), true);
+                if (empty($gwRes['status']) || empty($gwRes['response'])) {
+                    echo json_encode(['status' => "false", 'title' => 'Gateway Unavailable', 'message' => 'The selected gateway is not available or is disabled for this brand.']);
+                    exit();
+                }
+                $gwRow = $gwRes['response'][0];
+
+                // Classify as Personal using authoritative gateway slug (NOT dependent on amount)
+                $personalMeta = pp_is_personal_mobile_banking_gateway($gwRow['slug']);
+                if(!$personalMeta){
+                    echo json_encode(['status' => "false", 'title' => 'Invalid Gateway', 'message' => 'The selected gateway does not support automated Personal verification.']);
+                    exit();
+                }
+
+                // B. PAYMENT ELIGIBILITY — Verify with complete authoritative context (amount, currency, brand)
                 $gatewayInfo = pp_gateway_info($gateway_id, [
                     'brand' => ['id' => $brandId],
                     'transaction' => [
@@ -9447,13 +9463,6 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                 ]);
                 if (empty($gatewayInfo['status']) || $gatewayInfo['status'] === false) {
                     echo json_encode(['status' => "false", 'title' => 'Gateway Unavailable', 'message' => 'This gateway is not available for this transaction amount or currency.']);
-                    exit();
-                }
-
-                // Classify as Personal using authoritative gateway metadata
-                $personalMeta = pp_is_personal_mobile_banking_gateway($gatewayInfo);
-                if(!$personalMeta){
-                    echo json_encode(['status' => "false", 'title' => 'Invalid Gateway', 'message' => 'The selected gateway does not support automated Personal verification.']);
                     exit();
                 }
 

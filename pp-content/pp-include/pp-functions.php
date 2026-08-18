@@ -3454,6 +3454,7 @@
             return ['status' => 'false', 'message' => 'Missing transaction reference.'];
         }
 
+        // 1. Load authoritative transaction from DB (status must be initiated)
         $paramsTx = [':ref' => $txRef];
         $txRes = json_decode(getData($db_prefix_str . 'transaction', 'WHERE ref = :ref AND status = "initiated"', '* FROM', $paramsTx), true);
         if (empty($txRes['status']) || empty($txRes['response'])) {
@@ -3466,7 +3467,21 @@
             return ['status' => 'false', 'message' => 'Brand mismatch for this transaction.'];
         }
 
-        // Full gateway eligibility with authoritative transaction amount/currency
+        // 2. Load authoritative gateway from DB (classification does NOT depend on amount)
+        $gwParams = [':gateway_id' => $gatewayId, ':brand_id' => $actualBrandId];
+        $gwRes = json_decode(getData($db_prefix_str . 'gateways', 'WHERE gateway_id = :gateway_id AND brand_id = :brand_id AND status = "active"', '* FROM', $gwParams), true);
+        if (empty($gwRes['status']) || empty($gwRes['response'])) {
+            return ['status' => 'false', 'message' => 'Invalid or inactive gateway for this brand.'];
+        }
+        $gwRow = $gwRes['response'][0];
+
+        // 3. Classify as Personal using authoritative gateway slug (NOT dependent on amount)
+        $personalMeta = pp_is_personal_mobile_banking_gateway($gwRow['slug']);
+        if (!$personalMeta) {
+            return ['status' => 'false', 'message' => 'Gateway does not support personal auto-verification.'];
+        }
+
+        // 4. Check payment eligibility with complete authoritative context (amount, currency, brand)
         $gatewayInfo = pp_gateway_info($gatewayId, [
             'brand' => ['id' => $actualBrandId],
             'transaction' => [
@@ -3476,12 +3491,6 @@
         ]);
         if (empty($gatewayInfo['status']) || $gatewayInfo['status'] === false) {
             return ['status' => 'false', 'message' => 'Gateway is not available for this transaction amount or currency.'];
-        }
-
-        // Classify as Personal using authoritative gateway metadata
-        $personalMeta = pp_is_personal_mobile_banking_gateway($gatewayInfo);
-        if (!$personalMeta) {
-            return ['status' => 'false', 'message' => 'Gateway does not support personal auto-verification.'];
         }
 
         $normalizedNumber = pp_normalize_bd_mobile_number($payerNumberRaw);
@@ -3500,11 +3509,35 @@
             $pdo = connectDatabase();
             $tableName = $db_prefix_str . 'personal_payment_sessions';
 
+            // 5. Atomic: transaction binding + session creation in a single DB transaction
+            $pdo->beginTransaction();
+
             // Cancel any previous waiting sessions for this transaction_ref
             $stmtCancel = $pdo->prepare("UPDATE `{$tableName}` SET `status` = 'canceled', `updated_date` = :now WHERE `transaction_ref` = :ref AND `status` = 'waiting'");
             $stmtCancel->execute([':now' => $now, ':ref' => $txRef]);
 
-            // Insert active waiting session
+            // 6. Bind selected gateway metadata to the transaction while preserving initiated status
+            $stmtTxUpdate = $pdo->prepare("UPDATE `{$db_prefix_str}transaction` SET 
+                `gateway_id` = :gateway_id, 
+                `sender_key` = :sender_key, 
+                `sender_type` = 'Personal', 
+                `sender` = :sender, 
+                `updated_date` = :now 
+                WHERE `ref` = :ref AND `status` = 'initiated'");
+            $stmtTxUpdate->execute([
+                ':gateway_id' => $gatewayId,
+                ':sender_key' => strtolower($personalMeta['sender_key']),
+                ':sender'     => $normalizedNumber,
+                ':now'        => $now,
+                ':ref'        => $txRef
+            ]);
+
+            if ($stmtTxUpdate->rowCount() === 0) {
+                $pdo->rollBack();
+                return ['status' => 'false', 'message' => 'Transaction could not be updated. It may have been completed or canceled.'];
+            }
+
+            // 7. Insert active waiting session
             $stmtIns = $pdo->prepare("INSERT INTO `{$tableName}` (`transaction_ref`, `brand_id`, `gateway_id`, `sender_key`, `sender_type`, `payer_number`, `expected_amount`, `status`, `created_at`, `expires_at`, `created_date`, `updated_date`) VALUES (:transaction_ref, :brand_id, :gateway_id, :sender_key, 'Personal', :payer_number, :expected_amount, 'waiting', :created_at, :expires_at, :created_date, :updated_date)");
             $stmtIns->execute([
                 ':transaction_ref' => $txRef,
@@ -3521,21 +3554,7 @@
 
             $sessionId = (int)$pdo->lastInsertId();
 
-            // Atomically bind selected gateway metadata to the transaction while preserving initiated status
-            $stmtTxUpdate = $pdo->prepare("UPDATE `{$db_prefix_str}transaction` SET 
-                `gateway_id` = :gateway_id, 
-                `sender_key` = :sender_key, 
-                `sender_type` = 'Personal', 
-                `sender` = :sender, 
-                `updated_date` = :now 
-                WHERE `ref` = :ref AND `status` = 'initiated'");
-            $stmtTxUpdate->execute([
-                ':gateway_id' => $gatewayId,
-                ':sender_key' => strtolower($personalMeta['sender_key']),
-                ':sender'     => $normalizedNumber,
-                ':now'        => $now,
-                ':ref'        => $txRef
-            ]);
+            $pdo->commit();
 
             return [
                 'status'       => 'true',
@@ -3545,6 +3564,9 @@
                 'payer_number' => $normalizedNumber,
             ];
         } catch (Throwable $e) {
+            if (isset($pdo) && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
             error_log("Failed to create personal payment session: " . $e->getMessage());
             return ['status' => 'false', 'message' => 'Unable to initialize waiting session. Please try again.'];
         }
