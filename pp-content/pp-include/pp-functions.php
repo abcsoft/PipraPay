@@ -328,21 +328,581 @@
         return $path;
     }
 
-    function getAuthorizationHeader() {
+    function getAuthorizationHeader(): ?string {
         if (function_exists('getallheaders')) {
             $headers = getallheaders();
-            if (isset($headers['MHS-PIPRAPAY-API-KEY'])) {
-                return trim($headers['MHS-PIPRAPAY-API-KEY']);
+            if (is_array($headers)) {
+                $normalized = [];
+                foreach ($headers as $k => $v) {
+                    $normKey = strtoupper(str_replace('-', '_', (string)$k));
+                    $normalized[$normKey] = is_string($v) ? trim($v) : $v;
+                }
+                if (!empty($normalized['MHS_PIPRAPAY_API_KEY'])) {
+                    return (string)$normalized['MHS_PIPRAPAY_API_KEY'];
+                }
+                if (!empty($normalized['MH_PIPRAPAY_API_KEY'])) {
+                    return (string)$normalized['MH_PIPRAPAY_API_KEY'];
+                }
             }
         }
-    
+
+        if (isset($_SERVER['HTTP_MHS_PIPRAPAY_API_KEY']) && trim((string)$_SERVER['HTTP_MHS_PIPRAPAY_API_KEY']) !== '') {
+            return trim((string)$_SERVER['HTTP_MHS_PIPRAPAY_API_KEY']);
+        }
+        if (isset($_SERVER['HTTP_MH_PIPRAPAY_API_KEY']) && trim((string)$_SERVER['HTTP_MH_PIPRAPAY_API_KEY']) !== '') {
+            return trim((string)$_SERVER['HTTP_MH_PIPRAPAY_API_KEY']);
+        }
+
         foreach ($_SERVER as $key => $value) {
-            if (stripos($key, 'HTTP_MHS_PIPRAPAY_API_KEY') !== false) {
-                return trim($value);
+            $upperKey = strtoupper((string)$key);
+            if ($upperKey === 'HTTP_MHS_PIPRAPAY_API_KEY' || $upperKey === 'MHS_PIPRAPAY_API_KEY') {
+                if (is_string($value) && trim($value) !== '') {
+                    return trim($value);
+                }
             }
         }
-    
+        foreach ($_SERVER as $key => $value) {
+            $upperKey = strtoupper((string)$key);
+            if ($upperKey === 'HTTP_MH_PIPRAPAY_API_KEY' || $upperKey === 'MH_PIPRAPAY_API_KEY') {
+                if (is_string($value) && trim($value) !== '') {
+                    return trim($value);
+                }
+            }
+        }
+
         return null;
+    }
+
+    function pp_normalize_payment_creation_payload(array $data): array {
+        $fullName = trim((string)($data['full_name'] ?? ''));
+        $email = trim((string)($data['email_address'] ?? ''));
+        $mobile = trim((string)($data['mobile_number'] ?? ''));
+
+        if ($email === '' && $mobile === '' && isset($data['email_mobile'])) {
+            $emailMobile = trim((string)$data['email_mobile']);
+            if ($emailMobile !== '') {
+                if (filter_var($emailMobile, FILTER_VALIDATE_EMAIL)) {
+                    $email = $emailMobile;
+                    $mobile = '';
+                } elseif (preg_match('/^\+?[0-9\s\-()]{6,20}$/', $emailMobile)) {
+                    $mobile = $emailMobile;
+                    $email = '';
+                } else {
+                    if (strpos($emailMobile, '@') !== false) {
+                        $email = $emailMobile;
+                    } else {
+                        $mobile = $emailMobile;
+                    }
+                }
+            }
+        }
+
+        $amount = $data['amount'] ?? '0';
+        $currency = trim((string)($data['currency'] ?? 'BDT'));
+
+        $returnUrl = trim((string)($data['return_url'] ?? ($data['redirect_url'] ?? '')));
+        if ($returnUrl === '') {
+            $returnUrl = '--';
+        }
+
+        $webhookUrl = trim((string)($data['webhook_url'] ?? ''));
+        if ($webhookUrl === '') {
+            $webhookUrl = '--';
+        }
+
+        $cancelUrl = trim((string)($data['cancel_url'] ?? ''));
+        if ($cancelUrl === '') {
+            $cancelUrl = '--';
+        }
+
+        $metadataRaw = $data['metadata'] ?? '{}';
+        $metadata = [];
+        $metadataError = null;
+
+        if (is_string($metadataRaw)) {
+            $trimmedMeta = trim($metadataRaw);
+            if ($trimmedMeta === '' || $trimmedMeta === '{}' || $trimmedMeta === '[]') {
+                $metadata = [];
+            } else {
+                $decoded = json_decode($metadataRaw, true);
+                if ($decoded === null && json_last_error() !== JSON_ERROR_NONE) {
+                    $metadataError = 'INVALID_JSON';
+                } elseif (!is_array($decoded)) {
+                    $metadataError = 'INVALID_METADATA';
+                } else {
+                    $metadata = $decoded;
+                }
+            }
+        } elseif (is_array($metadataRaw)) {
+            $metadata = $metadataRaw;
+        } else {
+            $metadataError = 'INVALID_METADATA';
+        }
+
+        return [
+            'full_name'      => $fullName,
+            'email_address'  => $email,
+            'mobile_number'  => $mobile,
+            'amount'         => $amount,
+            'currency'       => $currency,
+            'return_url'     => $returnUrl,
+            'webhook_url'    => $webhookUrl,
+            'cancel_url'     => $cancelUrl,
+            'metadata'       => $metadata,
+            'metadata_error' => $metadataError
+        ];
+    }
+
+    function pp_get_site_url(): string {
+        global $site_url;
+        if (!empty($site_url)) {
+            return rtrim($site_url, '/') . '/';
+        }
+
+        $scriptName = $_SERVER['SCRIPT_NAME'] ?? '';
+        $scriptDir = trim(dirname($scriptName), '/\\');
+        $directory = (!empty($scriptDir) && $scriptDir !== '.' && $scriptDir !== '/') ? $scriptDir . '/' : '';
+
+        $fullDomain = pp_site_url('fulldomain');
+        if (empty($fullDomain) || $fullDomain === 'http://' || $fullDomain === 'https://') {
+            $host = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
+            $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+                        || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443)
+                        || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower($_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https');
+            $protocol = $isHttps ? 'https://' : 'http://';
+            $fullDomain = $protocol . $host;
+        }
+
+        return rtrim($fullDomain, '/') . '/' . $directory;
+    }
+
+    function pp_get_payment_path(): string {
+        global $path_payment;
+        if (!empty($path_payment)) {
+            return trim($path_payment, '/');
+        }
+        if (function_exists('get_env')) {
+            $custom = get_env('geneal-application-settings-paymentPath');
+            if (!empty($custom) && $custom !== '--') {
+                return trim($custom, '/');
+            }
+        }
+        return 'payment';
+    }
+
+    function pp_create_payment_transaction(array $apiRow, array $payload, string $mode = 'canonical'): array {
+        global $db_prefix;
+
+        $brandId = $apiRow['brand_id'] ?? '';
+
+        if (!empty($payload['metadata_error'])) {
+            if ($payload['metadata_error'] === 'INVALID_JSON') {
+                return [
+                    'status' => false,
+                    'http_code' => 400,
+                    'error' => [
+                        'code' => 'INVALID_JSON',
+                        'message' => 'The metadata JSON is invalid.'
+                    ]
+                ];
+            }
+            return [
+                'status' => false,
+                'http_code' => 400,
+                'error' => [
+                    'code' => 'INVALID_METADATA',
+                    'message' => 'Metadata must be an array or valid JSON string.'
+                ]
+            ];
+        }
+
+        $returnUrl = $payload['return_url'] ?? '--';
+        $webhookUrl = $payload['webhook_url'] ?? '--';
+        $cancelUrl = $payload['cancel_url'] ?? '--';
+
+        if ($returnUrl === '') {
+            $returnUrl = '--';
+        } else if ($returnUrl !== '--') {
+            $returnDomain = getDomainFromUrl($returnUrl);
+            if (!$returnDomain) {
+                return [
+                    'status' => false,
+                    'http_code' => 400,
+                    'error' => [
+                        'code' => 'INVALID_URL',
+                        'message' => 'Return URL is invalid.'
+                    ]
+                ];
+            }
+            $params = [ ':domain' => $returnDomain ];
+            $response_urlCheck = json_decode(getData($db_prefix.'domain','WHERE domain = :domain', '* FROM', $params), true);
+            if ($response_urlCheck['status'] == true) {
+                if ($response_urlCheck['response'][0]['status'] !== "active") {
+                    return [
+                        'status' => false,
+                        'http_code' => 400,
+                        'error' => [
+                            'code' => 'INVALID_URL',
+                            'message' => 'The Return URL ("'.$returnDomain.'") is whitelisted but not active. Please activate this domain in the "Domains" section to proceed.'
+                        ]
+                    ];
+                }
+            } else {
+                return [
+                    'status' => false,
+                    'http_code' => 400,
+                    'error' => [
+                        'code' => 'INVALID_URL',
+                        'message' => 'The provided Return URL ("'.$returnDomain.'") is not whitelisted. Please add this domain in the "Domains" section to continue.'
+                    ]
+                ];
+            }
+        }
+
+        if ($webhookUrl === '' || $webhookUrl === '--') {
+            $webhookUrl = '--';
+        } else {
+            if (!is_safe_webhook_url($webhookUrl)) {
+                return [
+                    'status' => false,
+                    'http_code' => 400,
+                    'error' => [
+                        'code' => 'INVALID_URL',
+                        'message' => 'Webhook URL is invalid or unsafe.'
+                    ]
+                ];
+            }
+            $webhookDomain = getDomainFromUrl($webhookUrl);
+            if (!$webhookDomain) {
+                return [
+                    'status' => false,
+                    'http_code' => 400,
+                    'error' => [
+                        'code' => 'INVALID_URL',
+                        'message' => 'Webhook URL is invalid.'
+                    ]
+                ];
+            }
+            $params = [ ':domain' => $webhookDomain ];
+            $response_urlCheck = json_decode(getData($db_prefix.'domain','WHERE domain = :domain', '* FROM', $params), true);
+            if ($response_urlCheck['status'] == true) {
+                if ($response_urlCheck['response'][0]['status'] !== "active") {
+                    return [
+                        'status' => false,
+                        'http_code' => 400,
+                        'error' => [
+                            'code' => 'INVALID_URL',
+                            'message' => 'The Webhook URL ("'.$webhookDomain.'") is whitelisted but not active. Please activate this domain in the "Domains" section to proceed.'
+                        ]
+                    ];
+                }
+            } else {
+                return [
+                    'status' => false,
+                    'http_code' => 400,
+                    'error' => [
+                        'code' => 'INVALID_URL',
+                        'message' => 'The provided Webhook URL ("'.$webhookDomain.'") is not whitelisted. Please add this domain in the "Domains" section to continue.'
+                    ]
+                ];
+            }
+        }
+
+        if ($cancelUrl === '' || $cancelUrl === '--') {
+            $cancelUrl = '--';
+        } else {
+            $cancelDomain = getDomainFromUrl($cancelUrl);
+            if (!$cancelDomain) {
+                return [
+                    'status' => false,
+                    'http_code' => 400,
+                    'error' => [
+                        'code' => 'INVALID_URL',
+                        'message' => 'Cancel URL is invalid.'
+                    ]
+                ];
+            }
+            $params = [ ':domain' => $cancelDomain ];
+            $response_urlCheck = json_decode(getData($db_prefix.'domain','WHERE domain = :domain', '* FROM', $params), true);
+            if ($response_urlCheck['status'] == true) {
+                if ($response_urlCheck['response'][0]['status'] !== "active") {
+                    return [
+                        'status' => false,
+                        'http_code' => 400,
+                        'error' => [
+                            'code' => 'INVALID_URL',
+                            'message' => 'The Cancel URL ("'.$cancelDomain.'") is whitelisted but not active. Please activate this domain in the "Domains" section to proceed.'
+                        ]
+                    ];
+                }
+            } else {
+                return [
+                    'status' => false,
+                    'http_code' => 400,
+                    'error' => [
+                        'code' => 'INVALID_URL',
+                        'message' => 'The provided Cancel URL ("'.$cancelDomain.'") is not whitelisted. Please add this domain in the "Domains" section to continue.'
+                    ]
+                ];
+            }
+        }
+
+        $fullName = $payload['full_name'] ?? '';
+        $email = $payload['email_address'] ?? '';
+        $mobile = $payload['mobile_number'] ?? '';
+        $amount = $payload['amount'] ?? '0';
+        $currency = $payload['currency'] ?? 'BDT';
+        $metadata = $payload['metadata'] ?? [];
+
+        if (empty($fullName)) {
+            return [
+                'status' => false,
+                'http_code' => 400,
+                'error' => [
+                    'code' => 'MISSING_FIELD',
+                    'message' => 'Full name is required.'
+                ]
+            ];
+        }
+
+        if ($mode === 'canonical') {
+            if (empty($email) || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                return [
+                    'status' => false,
+                    'http_code' => 400,
+                    'error' => [
+                        'code' => 'INVALID_EMAIL',
+                        'message' => 'A valid email address is required.'
+                    ]
+                ];
+            }
+
+            if (empty($mobile)) {
+                return [
+                    'status' => false,
+                    'http_code' => 400,
+                    'error' => [
+                        'code' => 'MISSING_FIELD',
+                        'message' => 'Mobile number is required.'
+                    ]
+                ];
+            }
+        } else {
+            // Legacy mode (create-charge SDK compatibility)
+            if ($email === '' && $mobile === '') {
+                return [
+                    'status' => false,
+                    'http_code' => 400,
+                    'error' => [
+                        'code' => 'MISSING_FIELD',
+                        'message' => 'Either email address or mobile number is required.'
+                    ]
+                ];
+            }
+
+            if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                return [
+                    'status' => false,
+                    'http_code' => 400,
+                    'error' => [
+                        'code' => 'INVALID_EMAIL',
+                        'message' => 'A valid email address is required.'
+                    ]
+                ];
+            }
+        }
+
+        if (!is_numeric($amount) || (float)$amount <= 0) {
+            return [
+                'status' => false,
+                'http_code' => 400,
+                'error' => [
+                    'code' => 'INVALID_AMOUNT',
+                    'message' => 'Amount must be a positive number.'
+                ]
+            ];
+        }
+
+        $params = [ ':brand_id' => $brandId, ':code' => $currency ];
+        $response_currency = json_decode(getData($db_prefix.'currency','WHERE brand_id = :brand_id AND code = :code', '* FROM', $params), true);
+        if ($response_currency['status'] != true) {
+            return [
+                'status' => false,
+                'http_code' => 400,
+                'error' => [
+                    'code' => 'INVALID_CURRENCY',
+                    'message' => 'Currency not supported.'
+                ]
+            ];
+        }
+
+        if ($email !== '') {
+            $params = [ ':brand_id' => $brandId, ':email' => $email, ':status' => 'suspend' ];
+            $check_customer = json_decode(getData($db_prefix.'customer','WHERE brand_id = :brand_id AND email = :email AND status = :status', '* FROM', $params), true);
+            if ($check_customer['status'] == true) {
+                $reason = $check_customer['response'][0]['suspend_reason'] ?? '--';
+                return [
+                    'status' => false,
+                    'http_code' => 400,
+                    'error' => [
+                        'code' => 'INVALID_CUSTOMER',
+                        'message' => ($reason === '--' || $reason === '') ? 'Customer is already suspended by the admin.' : 'Customer is already suspended by the admin. Reason: '.$reason
+                    ]
+                ];
+            }
+        } elseif ($mobile !== '') {
+            $params = [ ':brand_id' => $brandId, ':mobile' => $mobile, ':status' => 'suspend' ];
+            $check_customer = json_decode(getData($db_prefix.'customer','WHERE brand_id = :brand_id AND mobile = :mobile AND status = :status', '* FROM', $params), true);
+            if ($check_customer['status'] == true) {
+                $reason = $check_customer['response'][0]['suspend_reason'] ?? '--';
+                return [
+                    'status' => false,
+                    'http_code' => 400,
+                    'error' => [
+                        'code' => 'INVALID_CUSTOMER',
+                        'message' => ($reason === '--' || $reason === '') ? 'Customer is already suspended by the admin.' : 'Customer is already suspended by the admin. Reason: '.$reason
+                    ]
+                ];
+            }
+        }
+
+        $payment_id = generateItemID(27, 27);
+
+        $customerInfoJson = json_encode([
+            'name'   => $fullName,
+            'email'  => $email,
+            'mobile' => $mobile
+        ], JSON_UNESCAPED_UNICODE);
+
+        $sourceInfoJson = null;
+        if ($cancelUrl !== '--') {
+            $sourceInfoJson = json_encode([['label' => 'Cancel URL', 'value' => $cancelUrl]], JSON_UNESCAPED_UNICODE);
+        }
+
+        $columns = ['brand_id', 'ref', 'customer_info', 'amount', 'currency', 'metadata', 'return_url', 'webhook_url', 'created_date', 'updated_date'];
+        $values = [$brandId, $payment_id, $customerInfoJson, money_sanitize((string)$amount), $currency, json_encode($metadata, JSON_UNESCAPED_UNICODE), $returnUrl, $webhookUrl, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
+
+        if ($sourceInfoJson !== null) {
+            $columns[] = 'source_info';
+            $values[] = $sourceInfoJson;
+        }
+
+        $insertedPaymentId = insertTransactionRecord($columns, $values, 1);
+        if ($insertedPaymentId === false) {
+            return [
+                'status' => false,
+                'http_code' => 500,
+                'error' => [
+                    'code' => 'TRANSACTION_CREATION_FAILED',
+                    'message' => 'Failed to create transaction record. Please try again.'
+                ]
+            ];
+        }
+        $payment_id = $insertedPaymentId;
+
+        if ($email !== '') {
+            $params = [ ':brand_id' => $brandId, ':email' => $email ];
+            $response_customer = json_decode(getData($db_prefix.'customer','WHERE brand_id = :brand_id AND email = :email', '* FROM', $params), true);
+            if ($response_customer['status'] == false) {
+                $ref = generateItemID();
+                $columns = ['ref', 'brand_id', 'name', 'email', 'mobile', 'created_date', 'updated_date'];
+                $values = [$ref, $brandId, $fullName, $email, $mobile, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
+                insertData($db_prefix.'customer', $columns, $values);
+            }
+        } elseif ($mobile !== '') {
+            $params = [ ':brand_id' => $brandId, ':mobile' => $mobile ];
+            $response_customer = json_decode(getData($db_prefix.'customer','WHERE brand_id = :brand_id AND mobile = :mobile', '* FROM', $params), true);
+            if ($response_customer['status'] == false) {
+                $ref = generateItemID();
+                $columns = ['ref', 'brand_id', 'name', 'email', 'mobile', 'created_date', 'updated_date'];
+                $values = [$ref, $brandId, $fullName, $email, $mobile, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
+                insertData($db_prefix.'customer', $columns, $values);
+            }
+        }
+
+        $baseUrl = pp_get_site_url();
+        $paymentPath = pp_get_payment_path();
+        $absolutePpUrl = rtrim($baseUrl, '/') . '/' . trim($paymentPath, '/') . '/' . $payment_id;
+
+        return [
+            'status' => true,
+            'http_code' => 200,
+            'data' => [
+                'pp_id' => $payment_id,
+                'pp_url' => $absolutePpUrl
+            ]
+        ];
+    }
+
+    function pp_verify_payment_transaction(array $apiRow, array $data): array {
+        global $db_prefix;
+
+        $brandId = $apiRow['brand_id'] ?? '';
+        $pp_id = trim((string)($data['pp_id'] ?? ''));
+
+        if ($pp_id === '') {
+            return [
+                'status' => false,
+                'http_code' => 400,
+                'error' => [
+                    'code' => 'INVALID_PP_ID',
+                    'message' => 'A valid bp id is required.'
+                ]
+            ];
+        }
+
+        $params = [ ':ref' => $pp_id, ':brand_id' => $brandId ];
+        $response_transaction = json_decode(getData($db_prefix.'transaction','WHERE ref = :ref AND brand_id = :brand_id', '* FROM', $params), true);
+        if ($response_transaction['status'] != true) {
+            return [
+                'status' => false,
+                'http_code' => 400,
+                'error' => [
+                    'code' => 'INVALID_PP_ID',
+                    'message' => 'A valid bp id is required.'
+                ]
+            ];
+        }
+
+        $row = $response_transaction['response'][0];
+        $metadata = json_decode($row['metadata'] ?? '{}', true) ?: [];
+
+        $response_gateway = json_decode(getData($db_prefix.'gateways',' WHERE brand_id ="'.$row['brand_id'].'" AND gateway_id = "'.$row['gateway_id'].'"'), true);
+        $gateway = $response_gateway['response'][0]['display'] ?? '';
+
+        $customer_info = json_decode($row['customer_info'] ?? '{}', true) ?: [];
+
+        $params = [ ':brand_id' => $row['brand_id'] ];
+        $response_brand = json_decode(getData($db_prefix.'brands','WHERE brand_id = :brand_id', '* FROM', $params), true);
+        $tz = ($response_brand['response'][0]['timezone'] === '--' || empty($response_brand['response'][0]['timezone'])) ? 'Asia/Dhaka' : $response_brand['response'][0]['timezone'];
+
+        $net = money_sub(money_add($row['amount'], $row['processing_fee']), $row['discount_amount']);
+
+        $transactions = [
+            "pp_id" => $row['ref'],
+            "full_name" => $customer_info['name'] ?? 'N/A',
+            "email_address" => $customer_info['email'] ?? 'N/A',
+            "mobile_number" => $customer_info['mobile'] ?? 'N/A',
+            "gateway" => $gateway,
+            "amount" => money_round($row['amount']),
+            "fee" => money_round($row['processing_fee']),
+            "discount_amount" => money_round($row['discount_amount']),
+            "total" => money_round($net),
+            "local_net_amount" => money_round($row['local_net_amount']),
+            "currency" => $row['currency'],
+            "local_currency" => $row['local_currency'],
+            "metadata" => $metadata,
+            "sender" => $row['sender'],
+            "transaction_id" => $row['trx_id'],
+            "status" => $row['status'],
+            "date" => convertUTCtoUserTZ($row['created_date'], $tz, "M d, Y h:i A")
+        ];
+
+        return [
+            'status' => true,
+            'http_code' => 200,
+            'data' => $transactions
+        ];
     }
 
     function connectDatabase() {

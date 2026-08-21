@@ -134,11 +134,103 @@ This app acts as a secure companion tool for PipraPay payment verification and a
 👉 Docs: https://help.piprapay.com/  
 👉 API Reference: https://piprapay.readme.io  
 
-- Install PipraPay  
-- Build plugins & modules  
-- Integrate APIs  
-- Configure gateways  
-- Use webhooks & automation  
+### 🔑 Authentication
+
+**Canonical Header:**
+```http
+MHS-PIPRAPAY-API-KEY: your_api_key_here
+```
+
+### ⚡ Canonical v3 Endpoints
+
+#### 1. Create Payment (Checkout Redirect)
+```http
+POST /api/checkout/redirect
+Header: MHS-PIPRAPAY-API-KEY: your_api_key_here
+Content-Type: application/json
+
+{
+    "full_name": "Customer Name",
+    "email_address": "customer@example.com",
+    "mobile_number": "01700000000",
+    "amount": 100,
+    "currency": "BDT",
+    "return_url": "https://example.com/success",
+    "webhook_url": "https://example.com/webhook",
+    "metadata": {
+        "order_id": "ORD-12345"
+    }
+}
+```
+
+**Response (Success):**
+```json
+{
+    "pp_id": "444566339265087332154204482",
+    "pp_url": "https://your-domain.com/payment/444566339265087332154204482"
+}
+```
+
+#### 2. Verify Payment
+```http
+POST /api/verify-payment
+Header: MHS-PIPRAPAY-API-KEY: your_api_key_here
+Content-Type: application/json
+
+{
+    "pp_id": "444566339265087332154204482"
+}
+```
+
+#### 3. Refund Payment
+```http
+POST /api/refund-payment
+Header: MHS-PIPRAPAY-API-KEY: your_api_key_here
+Content-Type: application/json
+
+{
+    "pp_id": "444566339265087332154204482"
+}
+```
+
+---
+
+### 🔄 Backward Compatibility (Legacy SDK & Integrations)
+
+PipraPay v3 core maintains full backward compatibility for older official SDKs (including the published Laravel SDK).
+
+#### Supported Legacy Auth Header *(Deprecated but supported)*:
+```http
+mh-piprapay-api-key: your_api_key_here
+```
+*(Also accepts `MH-PIPRAPAY-API-KEY` and case-insensitive variations).*
+
+#### Supported Legacy Endpoints *(Deprecated but supported)*:
+
+- **Legacy Create Charge**: `POST /api/create-charge`  
+  Accepts legacy payload format:
+  ```json
+  {
+      "full_name": "John Doe",
+      "email_mobile": "john@example.com",
+      "amount": 50,
+      "currency": "BDT",
+      "metadata": {
+          "invoiceid": "INV-123"
+      },
+      "redirect_url": "https://example.com/success",
+      "cancel_url": "https://example.com/cancel",
+      "webhook_url": "https://example.com/webhook"
+  }
+  ```
+  - `email_mobile`: Automatically normalized to `email_address` (if valid email) or `mobile_number` (if phone number).
+  - `redirect_url`: Automatically mapped to `return_url`.
+  - `cancel_url`: Validated against domain whitelist and safely recorded in transaction source info.
+  - `metadata`: Accepts both JSON objects/arrays and JSON strings without double-encoding.
+  - **Response**: Returns `{"pp_id": "...", "pp_url": "..."}`.
+
+- **Legacy Verify Payments**: `POST /api/verify-payments`  
+  Accepts `{"pp_id": "..."}` and produces the exact same verification response and scope enforcement as canonical `/api/verify-payment`.  
 
 ## 🚀 Database Migrations & Deployment
 

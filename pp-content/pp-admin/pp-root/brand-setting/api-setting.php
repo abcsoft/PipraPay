@@ -128,6 +128,11 @@
                         <div style="display: flex; flex-direction: row-reverse; height: 53px; align-items: center; padding-right: 20px; font-size: 22px;">
                            <svg onclick="filter_hide_show('filter-tab-data')" style="cursor: pointer;" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-filter"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 4h16v2.172a2 2 0 0 1 -.586 1.414l-4.414 4.414v7l-6 2v-8.5l-4.48 -4.928a2 2 0 0 1 -.52 -1.345v-2.227z" /></svg>
                         </div>
+                    <div class="alert alert-info mx-3 mt-3 mb-0" role="alert">
+                        <div class="d-flex align-items-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon me-2"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 9v4" /><path d="M12 16v.01" /><path d="M5 19h14a2 2 0 0 0 1.84 -2.75l-7 -12a2 2 0 0 0 -3.68 0l-7 12a2 2 0 0 0 1.84 2.75" /></svg>
+                            <div>For security, the full API key is shown only once when created.</div>
+                        </div>
                     </div>
 
                    <div class="card-body border-bottom py-3">
@@ -501,7 +506,7 @@
                         </div>
                         <div>
                             <h4 class="alert-title">Important Notice</h4>
-                            <div class="text-secondary">This API key will only be shown once. Copy and store it securely.</div>
+                            <div class="text-secondary">For security, the full API key is shown only once when created. Copy and store it securely.</div>
                         </div>
                     </div>
                 </div>

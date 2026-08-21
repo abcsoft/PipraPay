@@ -378,721 +378,292 @@
                             exit;
                         }
 
-                        if($api_type == "checkout"){
-                            $api_scopes = $response_api['response'][0]['api_scopes'] ?? [];
-                            if (is_string($api_scopes)) {
-                                $api_scopes = json_decode($api_scopes, true);
-                            }
+                        $apiRow = $response_api['response'][0];
 
+                        $api_scopes = $apiRow['api_scopes'] ?? [];
+                        if (is_string($api_scopes)) {
+                            $api_scopes = json_decode($api_scopes, true) ?: [];
+                        }
+
+                        $isCheckoutRedirect = ($api_type === 'checkout' && ($segments[2] ?? null) === 'redirect');
+                        $isLegacyCreateCharge = ($api_type === 'create-charge');
+                        $isCheckoutPopup = ($api_type === 'checkout' && ($segments[2] ?? null) === 'popup');
+
+                        // 1. CANONICAL CREATE PAYMENT: POST /api/checkout/redirect
+                        if ($isCheckoutRedirect) {
                             if (!in_array("create_payment", $api_scopes)) {
-                                $requiredScope = 'Create Payment';
-
                                 http_response_code(400);
                                 echo json_encode([
                                     'error' => [
                                         'code'    => 'INSUFFICIENT_SCOPE',
-                                        'message' => "The API key does not have the required permission: {$requiredScope}"
+                                        'message' => "The API key does not have the required permission: Create Payment"
                                     ]
                                 ]);
                                 exit;
                             }
 
-                            $checkout_type = $segments[2] ?? null;
+                            $normalizedPayload = pp_normalize_payment_creation_payload($data);
+                            $createResult = pp_create_payment_transaction($apiRow, $normalizedPayload, 'canonical');
 
-                            if($checkout_type == "redirect"){
-                                $fullName      = $data['full_name'] ?? '';
-                                $email         = $data['email_address'] ?? '';
-                                $mobile        = $data['mobile_number'] ?? '';
-                                $amount        = $data['amount'] ?? '0';
-                                $currency      = $data['currency'] ?? 'BDT';
-                                $returnUrl     = $data['return_url'] ?? '';
-                                $webhookUrl    = $data['webhook_url'] ?? '';
-                                $metadataRaw   = $data['metadata'] ?? '{}';
-
-                                if($returnUrl == ""){
-                                    $returnUrl = '--';
-                                }else{
-                                    $returnDomain  = getDomainFromUrl($returnUrl);
-
-                                    if (!$returnDomain) {
-                                        http_response_code(400);
-                                        echo json_encode([
-                                            'error' => [
-                                                'code' => 'INVALID_URL',
-                                                'message' => 'Return URL is invalid.'
-                                            ]
-                                        ]);
-                                        exit;
-                                    }else{
-                                        $params = [ ':domain' => $returnDomain ];
-
-                                        $response_urlCheck = json_decode(getData($db_prefix.'domain','WHERE domain = :domain', '* FROM', $params),true);
-                                        if($response_urlCheck['status'] == true){
-                                            if($response_urlCheck['response'][0]['status'] !== "active"){
-                                                http_response_code(400);
-                                                echo json_encode([
-                                                    'error' => [
-                                                        'code' => 'INVALID_URL',
-                                                        'message' => 'The Return URL ("'.$returnDomain.'") is whitelisted but not active. Please activate this domain in the "Domains" section to proceed.'
-                                                    ]
-                                                ]);
-                                                exit;
-                                            }
-                                        }else{
-                                            http_response_code(400);
-                                            echo json_encode([
-                                                'error' => [
-                                                    'code' => 'INVALID_URL',
-                                                    'message' => 'The provided Return URL ("'.$returnDomain.'") is not whitelisted. Please add this domain in the "Domains" section to continue.'
-                                                ]
-                                            ]);
-                                            exit;
-                                        }
-                                    }
-                                }
-
-                                if($webhookUrl == ""){
-                                    $webhookUrl = '--';
-                                }else{
-                                    $webhookDomain = getDomainFromUrl($webhookUrl);
-
-                                    if (!$webhookDomain) {
-                                        http_response_code(400);
-                                        echo json_encode([
-                                            'error' => [
-                                                'code' => 'INVALID_URL',
-                                                'message' => 'Webhook URL is invalid.'
-                                            ]
-                                        ]);
-                                        exit;
-                                    }else{
-                                        $params = [ ':domain' => $webhookDomain ];
-
-                                        $response_urlCheck = json_decode(getData($db_prefix.'domain','WHERE domain = :domain', '* FROM', $params),true);
-                                        if($response_urlCheck['status'] == true){
-                                            if($response_urlCheck['response'][0]['status'] !== "active"){
-                                                http_response_code(400);
-                                                echo json_encode([
-                                                    'error' => [
-                                                        'code' => 'INVALID_URL',
-                                                        'message' => 'The Webhook URL ("'.$webhookDomain.'") is whitelisted but not active. Please activate this domain in the "Domains" section to proceed.'
-                                                    ]
-                                                ]);
-                                                exit;
-                                            }
-                                        }else{
-                                            http_response_code(400);
-                                            echo json_encode([
-                                                'error' => [
-                                                    'code' => 'INVALID_URL',
-                                                    'message' => 'The provided Webhook URL ("'.$webhookDomain.'") is not whitelisted. Please add this domain in the "Domains" section to continue.'
-                                                ]
-                                            ]);
-                                            exit;
-                                        }
-                                    }
-                                }
-
-                                if (is_string($metadataRaw)) {
-                                    $metadata = json_decode($metadataRaw, true);
-                                    if ($metadata === null && json_last_error() !== JSON_ERROR_NONE) {
-                                        http_response_code(400);
-                                        echo json_encode([
-                                            'error' => [
-                                                'code' => 'INVALID_JSON',
-                                                'message' => 'The metadata JSON is invalid.'
-                                            ]
-                                        ]);
-                                        exit;
-                                    }
-                                } elseif (is_array($metadataRaw)) {
-                                    $metadata = $metadataRaw;
-                                } else {
-                                    http_response_code(400);
-                                    echo json_encode([
-                                        'error' => [
-                                            'code' => 'INVALID_METADATA',
-                                            'message' => 'Metadata must be an array or valid JSON string.'
-                                        ]
-                                    ]);
-                                    exit;
-                                }
-
-                                if (empty($fullName)) {
-                                    http_response_code(400);
-                                    echo json_encode([
-                                        'error' => [
-                                            'code' => 'MISSING_FIELD',
-                                            'message' => 'Full name is required.'
-                                        ]
-                                    ]);
-                                    exit;
-                                }
-
-                                if (empty($email) || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-                                    http_response_code(400);
-                                    echo json_encode([
-                                        'error' => [
-                                            'code' => 'INVALID_EMAIL',
-                                            'message' => 'A valid email address is required.'
-                                        ]
-                                    ]);
-                                    exit;
-                                }
-
-                                if (empty($mobile)) {
-                                    http_response_code(400);
-                                    echo json_encode([
-                                        'error' => [
-                                            'code' => 'MISSING_FIELD',
-                                            'message' => 'Mobile number is required.'
-                                        ]
-                                    ]);
-                                    exit;
-                                }
-
-                                if (!is_numeric($amount) || $amount <= 0) {
-                                    http_response_code(400);
-                                    echo json_encode([
-                                        'error' => [
-                                            'code' => 'INVALID_AMOUNT',
-                                            'message' => 'Amount must be a positive number.'
-                                        ]
-                                    ]);
-                                    exit;
-                                }
-
-                                $params = [ ':brand_id' => $response_api['response'][0]['brand_id'], ':code' => $currency ];
-
-                                $response_currency = json_decode(getData($db_prefix.'currency','WHERE brand_id = :brand_id AND code = :code', '* FROM', $params),true);
-                                if($response_currency['status'] == true){
-                                    $params = [ ':brand_id' => $response_api['response'][0]['brand_id'], ':email' => $email, ':status' => 'suspend' ];
-
-                                    $check_customer = json_decode(getData($db_prefix.'customer','WHERE brand_id = :brand_id AND email = :email AND status = :status', '* FROM', $params),true);
-                                    if($check_customer['status'] == true){
-                                        http_response_code(400);
-                                        echo json_encode([
-                                            'error' => [
-                                                'code' => 'INVALID_CUSTOMER',
-                                                'message' => $check_customer['response'][0]['suspend_reason'] == "--" ? 'Customer is already suspended by the admin.' : 'Customer is already suspended by the admin. Reason: '.$check_customer['response'][0]['suspend_reason']
-                                            ]
-                                        ]);
-                                        exit;
-                                    }
-
-                                    $payment_id = generateItemID(27, 27);
-
-                                    $customerInfoJson = json_encode([
-                                        'name'   => $fullName,
-                                        'email'  => $email,
-                                        'mobile' => $mobile
-                                    ], JSON_UNESCAPED_UNICODE);
-
-                                    $columns = ['brand_id', 'ref', 'customer_info', 'amount', 'currency', 'metadata', 'return_url', 'webhook_url', 'created_date', 'updated_date'];
-                                    $values = [$response_api['response'][0]['brand_id'], $payment_id, $customerInfoJson, money_sanitize($amount), $currency, json_encode($metadata), $returnUrl, $webhookUrl, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
-
-                                    $insertedPaymentId = insertTransactionRecord($columns, $values, 1);
-                                    if ($insertedPaymentId === false) {
-                                        http_response_code(500);
-                                        echo json_encode([
-                                            'error' => [
-                                                'code' => 'TRANSACTION_CREATION_FAILED',
-                                                'message' => 'Failed to create transaction record. Please try again.'
-                                            ]
-                                        ]);
-                                        exit;
-                                    }
-                                    $payment_id = $insertedPaymentId;
-
-                                    $params = [ ':brand_id' => $response_api['response'][0]['brand_id'], ':email' => $email ];
-
-                                    $response_customer = json_decode(getData($db_prefix.'customer','WHERE brand_id = :brand_id AND email = :email', '* FROM', $params),true);
-                                    if($response_customer['status'] == false){
-                                        $ref = generateItemID();
-
-                                        $columns = ['ref', 'brand_id', 'name', 'email', 'mobile', 'created_date', 'updated_date'];
-                                        $values = [$ref, $response_api['response'][0]['brand_id'], $fullName, $email, $mobile, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
-
-                                        insertData($db_prefix.'customer', $columns, $values);
-                                    }
-
-                                    echo json_encode(['pp_id' => $payment_id, 'pp_url' => $site_url.$path_payment.'/'.$payment_id]);
-                                }else{
-                                    http_response_code(400);
-                                    echo json_encode([
-                                        'error' => [
-                                            'code' => 'INVALID_CURRENCY',
-                                            'message' => 'Currency not supported.'
-                                        ]
-                                    ]);
-                                    exit;
-                                }
-                            }else{
-                                if($checkout_type == "popup"){
-                                    $fullName      = $data['full_name'] ?? '';
-                                    $email         = $data['email_address'] ?? '';
-                                    $mobile        = $data['mobile_number'] ?? '';
-                                    $amount        = $data['amount'] ?? '0';
-                                    $currency      = $data['currency'] ?? 'BDT';
-                                    $webhookUrl    = $data['webhook_url'] ?? '--';
-                                    $metadataRaw   = $data['metadata'] ?? '{}';
-
-                                    if ($webhookUrl === '' || $webhookUrl === '--') {
-                                        $webhookUrl = '--';
-                                    } else {
-                                        if (!is_safe_webhook_url($webhookUrl)) {
-                                            http_response_code(400);
-                                            echo json_encode([
-                                                'error' => [
-                                                    'code' => 'INVALID_URL',
-                                                    'message' => 'Webhook URL is invalid or unsafe.'
-                                                ]
-                                            ]);
-                                            exit;
-                                        }
-                                        $webhookDomain = getDomainFromUrl($webhookUrl);
-                                        if (!$webhookDomain) {
-                                            http_response_code(400);
-                                            echo json_encode([
-                                                'error' => [
-                                                    'code' => 'INVALID_URL',
-                                                    'message' => 'Webhook URL is invalid.'
-                                                ]
-                                            ]);
-                                            exit;
-                                        }else{
-                                            $params = [ ':domain' => $webhookDomain ];
-
-                                            $response_urlCheck = json_decode(getData($db_prefix.'domain','WHERE domain = :domain', '* FROM', $params),true);
-                                            if($response_urlCheck['status'] == true){
-                                                if($response_urlCheck['response'][0]['status'] !== "active"){
-                                                    http_response_code(400);
-                                                    echo json_encode([
-                                                        'error' => [
-                                                            'code' => 'INVALID_URL',
-                                                            'message' => 'The Webhook URL ("'.$webhookDomain.'") is whitelisted but not active. Please activate this domain in the "Domains" section to proceed.'
-                                                        ]
-                                                    ]);
-                                                    exit;
-                                                }
-                                            }else{
-                                                http_response_code(400);
-                                                echo json_encode([
-                                                    'error' => [
-                                                        'code' => 'INVALID_URL',
-                                                        'message' => 'The provided Webhook URL ("'.$webhookDomain.'") is not whitelisted. Please add this domain in the "Domains" section to continue.'
-                                                    ]
-                                                ]);
-                                                exit;
-                                            }
-                                        }
-                                    }
-
-                                    if (is_string($metadataRaw)) {
-                                        $metadata = json_decode($metadataRaw, true);
-                                        if ($metadata === null && json_last_error() !== JSON_ERROR_NONE) {
-                                            http_response_code(400);
-                                            echo json_encode([
-                                                'error' => [
-                                                    'code' => 'INVALID_JSON',
-                                                    'message' => 'The metadata JSON is invalid.'
-                                                ]
-                                            ]);
-                                            exit;
-                                        }
-                                    } elseif (is_array($metadataRaw)) {
-                                        $metadata = $metadataRaw;
-                                    } else {
-                                        http_response_code(400);
-                                        echo json_encode([
-                                            'error' => [
-                                                'code' => 'INVALID_METADATA',
-                                                'message' => 'Metadata must be an array or valid JSON string.'
-                                            ]
-                                        ]);
-                                        exit;
-                                    }
-
-                                    if (empty($fullName)) {
-                                        http_response_code(400);
-                                        echo json_encode([
-                                            'error' => [
-                                                'code' => 'MISSING_FIELD',
-                                                'message' => 'Full name is required.'
-                                            ]
-                                        ]);
-                                        exit;
-                                    }
-
-                                    if (empty($email) || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-                                        http_response_code(400);
-                                        echo json_encode([
-                                            'error' => [
-                                                'code' => 'INVALID_EMAIL',
-                                                'message' => 'A valid email address is required.'
-                                            ]
-                                        ]);
-                                        exit;
-                                    }
-
-                                    if (empty($mobile)) {
-                                        http_response_code(400);
-                                        echo json_encode([
-                                            'error' => [
-                                                'code' => 'MISSING_FIELD',
-                                                'message' => 'Mobile number is required.'
-                                            ]
-                                        ]);
-                                        exit;
-                                    }
-
-                                    if (!is_numeric($amount) || $amount <= 0) {
-                                        http_response_code(400);
-                                        echo json_encode([
-                                            'error' => [
-                                                'code' => 'INVALID_AMOUNT',
-                                                'message' => 'Amount must be a positive number.'
-                                            ]
-                                        ]);
-                                        exit;
-                                    }
-
-                                    $params = [ ':brand_id' => $response_api['response'][0]['brand_id'], ':code' => $currency ];
-
-                                    $response_currency = json_decode(getData($db_prefix.'currency','WHERE brand_id = :brand_id AND code = :code', '* FROM', $params),true);
-                                    if($response_currency['status'] == true){
-                                        $params = [ ':brand_id' => $response_api['response'][0]['brand_id'], ':email' => $email, ':status' => 'suspend' ];
-
-                                        $check_customer = json_decode(getData($db_prefix.'customer','WHERE brand_id = :brand_id AND email = :email AND status = :status', '* FROM', $params),true);
-                                        if($check_customer['status'] == true){
-                                            http_response_code(400);
-                                            echo json_encode([
-                                                'error' => [
-                                                    'code' => 'INVALID_CUSTOMER',
-                                                    'message' => $check_customer['response'][0]['suspend_reason'] == "--" ? 'Customer is already suspended by the admin.' : 'Customer is already suspended by the admin. Reason: '.$check_customer['response'][0]['suspend_reason']
-                                                ]
-                                            ]);
-                                            exit;
-                                        }
-
-
-                                        $payment_id = generateItemID(27, 27);
-
-                                        $customerInfoJson = json_encode([
-                                            'name'   => $fullName,
-                                            'email'  => $email,
-                                            'mobile' => $mobile
-                                        ], JSON_UNESCAPED_UNICODE);
-
-                                        $columns = ['brand_id', 'ref', 'customer_info', 'amount', 'currency', 'metadata', 'webhook_url', 'created_date', 'updated_date'];
-                                        $values = [$response_api['response'][0]['brand_id'], $payment_id, $customerInfoJson, money_sanitize($amount), $currency, json_encode($metadata), $webhookUrl, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
-
-                                        $insertedPaymentId = insertTransactionRecord($columns, $values, 1);
-                                        if ($insertedPaymentId === false) {
-                                            http_response_code(500);
-                                            echo json_encode([
-                                                'error' => [
-                                                    'code' => 'TRANSACTION_CREATION_FAILED',
-                                                    'message' => 'Failed to create transaction record. Please try again.'
-                                                ]
-                                            ]);
-                                            exit;
-                                        }
-                                        $payment_id = $insertedPaymentId;
-
-                                        $params = [ ':brand_id' => $response_api['response'][0]['brand_id'], ':email' => $email ];
-
-                                        $response_customer = json_decode(getData($db_prefix.'customer','WHERE brand_id = :brand_id AND email = :email', '* FROM', $params),true);
-                                        if($response_customer['status'] == false){
-                                            $ref = generateItemID();
-
-                                            $columns = ['ref', 'brand_id', 'name', 'email', 'mobile', 'created_date', 'updated_date'];
-                                            $values = [$ref, $response_api['response'][0]['brand_id'], $fullName, $email, $mobile, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
-
-                                            insertData($db_prefix.'customer', $columns, $values);
-                                        }
-
-                                        echo json_encode(['pp_id' => $payment_id, 'pp_url' => $site_url.$path_payment.'/'.$payment_id]);
-                                    }else{
-                                        http_response_code(400);
-                                        echo json_encode([
-                                            'error' => [
-                                                'code' => 'INVALID_CURRENCY',
-                                                'message' => 'Currency not supported.'
-                                            ]
-                                        ]);
-                                        exit;
-                                    }
-                                }else{
-                                    http_response_code(400);
-                                    echo json_encode([
-                                        'error' => [
-                                            'code'    => 'INVALID_JSON_PAYLOAD',
-                                            'message' => 'The JSON payload is invalid or malformed.'
-                                        ]
-                                    ]);
-                                }
+                            if (empty($createResult['status'])) {
+                                http_response_code($createResult['http_code'] ?? 400);
+                                echo json_encode(['error' => $createResult['error']]);
+                                exit;
                             }
-                        }else{
-                            if($api_type == "verify-payment"){
-                                $api_scopes = $response_api['response'][0]['api_scopes'] ?? [];
-                                if (is_string($api_scopes)) {
-                                    $api_scopes = json_decode($api_scopes, true);
-                                }
 
-                                if (!in_array("verify_payment", $api_scopes)) {
-                                    $requiredScope = 'Verify Payment';
-
-                                    http_response_code(400);
-                                    echo json_encode([
-                                        'error' => [
-                                            'code'    => 'INSUFFICIENT_SCOPE',
-                                            'message' => "The API key does not have the required permission: {$requiredScope}"
-                                        ]
-                                    ]);
-                                    exit;
-                                }
-
-                                $pp_id = $data['pp_id'] ?? '';
-
-                                if($pp_id == ""){
-                                    http_response_code(400);
-                                    echo json_encode([
-                                        'error' => [
-                                            'code' => 'INVALID_PP_ID',
-                                            'message' => 'A valid bp id is required.'
-                                        ]
-                                    ]);
-                                    exit;
-                                }else{
-                                    $params = [ ':ref' => $pp_id, ':brand_id' => $response_api['response'][0]['brand_id'] ];
-
-                                    $response_transaction = json_decode(getData($db_prefix.'transaction','WHERE ref = :ref AND brand_id = :brand_id', '* FROM', $params),true);
-                                    if($response_transaction['status'] == true){
-                                            $metadata = json_decode($response_transaction['response'][0]['metadata'], true) ?: [];
-
-                                            $response_gateway = json_decode(getData($db_prefix.'gateways',' WHERE brand_id ="'.$response_transaction['response'][0]['brand_id'].'" AND gateway_id = "'.$response_transaction['response'][0]['gateway_id'].'"'),true);
-
-                                            $gateway = $response_gateway['response'][0]['display'] ?? '';
-
-                                            $customer_info = json_decode($response_transaction['response'][0]['customer_info'], true) ?: [];
-
-                                            $params = [ ':brand_id' => $response_transaction['response'][0]['brand_id'] ];
-
-                                            $response_brand = json_decode(getData($db_prefix.'brands','WHERE brand_id = :brand_id', '* FROM', $params),true);
-
-                                            $net = money_sub(money_add($response_transaction['response'][0]['amount'], $response_transaction['response'][0]['processing_fee']), $response_transaction['response'][0]['discount_amount']);
-
-                                            $transactions = [
-                                                "pp_id" => $response_transaction['response'][0]['ref'],
-                                                "full_name" => $customer_info['name'] ?? 'N/A',
-                                                "email_address" => $customer_info['email'] ?? 'N/A',
-                                                "mobile_number" => $customer_info['mobile'] ?? 'N/A',
-                                                "gateway" => $gateway,
-                                                "amount" => money_round($response_transaction['response'][0]['amount']),
-                                                "fee" => money_round($response_transaction['response'][0]['processing_fee']),
-                                                "discount_amount" => money_round($response_transaction['response'][0]['discount_amount']),
-                                                "total" => money_round($net),
-                                                "local_net_amount" => money_round($response_transaction['response'][0]['local_net_amount']),
-                                                "currency" => $response_transaction['response'][0]['currency'],
-                                                "local_currency" => $response_transaction['response'][0]['local_currency'],
-                                                "metadata" => $metadata, // ← AS-IS
-                                                "sender" => $response_transaction['response'][0]['sender'],
-                                                "transaction_id" => $response_transaction['response'][0]['trx_id'],
-                                                "status" => $response_transaction['response'][0]['status'],
-                                                "date" => convertUTCtoUserTZ($response_transaction['response'][0]['created_date'], ($response_brand['response'][0]['timezone'] === '--' || $response_brand['response'][0]['timezone'] === '') ? 'Asia/Dhaka' : $response_brand['response'][0]['timezone'], "M d, Y h:i A")
-                                            ];
-
-                                            echo json_encode($transactions);
-                                    }else{
-                                        http_response_code(400);
-                                        echo json_encode([
-                                            'error' => [
-                                                'code' => 'INVALID_PP_ID',
-                                                'message' => 'A valid bp id is required.'
-                                            ]
-                                        ]);
-                                        exit;
-                                    }
-                                }
-                            }else{
-                                if($api_type == "refund-payment"){
-                                    $api_scopes = $response_api['response'][0]['api_scopes'] ?? [];
-                                    if (is_string($api_scopes)) {
-                                        $api_scopes = json_decode($api_scopes, true);
-                                    }
-
-                                    if (!in_array("refund_payment", $api_scopes)) {
-                                        $requiredScope = 'Refund Payment';
-
-                                        http_response_code(400);
-                                        echo json_encode([
-                                            'error' => [
-                                                'code'    => 'INSUFFICIENT_SCOPE',
-                                                'message' => "The API key does not have the required permission: {$requiredScope}"
-                                            ]
-                                        ]);
-                                        exit;
-                                    }
-
-                                    $pp_id = $data['pp_id'] ?? '';
-
-                                    if($pp_id == ""){
-                                        http_response_code(400);
-                                        echo json_encode([
-                                            'error' => [
-                                                'code' => 'INVALID_PP_ID',
-                                                'message' => 'A valid bp id is required.'
-                                            ]
-                                        ]);
-                                        exit;
-                                    }else{
-                                        $params = [ ':ref' => $pp_id, ':brand_id' => $response_api['response'][0]['brand_id'] ];
-
-                                        $response_transaction = json_decode(getData($db_prefix.'transaction','WHERE ref = :ref AND brand_id = :brand_id', '* FROM', $params),true);
-                                        if($response_transaction['status'] == true){
-                                            if (($response_transaction['response'][0]['status'] ?? '') !== 'completed') {
-                                                http_response_code(400);
-                                                echo json_encode([
-                                                    'error' => [
-                                                        'code' => 'INVALID_STATUS',
-                                                        'message' => 'Only completed transactions can be refunded.'
-                                                    ]
-                                                ]);
-                                                exit;
-                                            }
-
-                                            $transactionRow = $response_transaction['response'][0];
-                                            $refundResult = null;
-
-                                            $params = [ ':gateway_id' => $transactionRow['gateway_id'], ':brand_id' => $transactionRow['brand_id'] ];
-                                            $response_gateway_info = json_decode(getData($db_prefix.'gateways','WHERE gateway_id = :gateway_id AND brand_id = :brand_id', '* FROM', $params),true);
-                                            $gateway_slug = $response_gateway_info['response'][0]['slug'] ?? '';
-                                             if ($gateway_slug !== 'bkash-api-tokenized') {
-                                                 http_response_code(400);
-                                                 echo json_encode([
-                                                     'error' => [
-                                                         'code' => 'REFUND_UNSUPPORTED',
-                                                         'message' => 'Refund is not supported for this gateway.'
-                                                     ]
-                                                 ]);
-                                                 exit;
-                                             }
-
-                                             $refundPayload = [
-                                                 'amount' => money_round($transactionRow['local_net_amount']),
-                                                 'sku' => $transactionRow['ref'],
-                                                 'reason' => 'API refund'
-                                             ];
-
-                                             $refundResult = pp_bkash_tokenized_refund($transactionRow, $refundPayload);
-
-                                             if (empty($refundResult['status'])) {
-                                                 http_response_code(400);
-                                                 echo json_encode([
-                                                     'error' => [
-                                                         'code' => 'REFUND_FAILED',
-                                                         'message' => $refundResult['message'] ?? 'Refund failed.'
-                                                     ]
-                                                 ]);
-                                                 exit;
-                                             } 
-
-                                            $source_info = json_decode($transactionRow['source_info'], true) ?: [];
-                                            $source_info_changed = false;
-
-                                            if (!empty($refundResult['data'])) {
-                                                $refundTrxId = $refundResult['data']['refundTrxId'] ?? '';
-                                                $refundAmount = $refundResult['data']['refundAmount'] ?? '';
-                                                $completedTime = $refundResult['data']['completedTime'] ?? '';
-
-                                                if ($refundTrxId !== '') {
-                                                    $source_info[] = ['label' => 'Refund TrxID', 'value' => $refundTrxId];
-                                                    $source_info_changed = true;
-                                                }
-                                                if ($refundAmount !== '') {
-                                                    $source_info[] = ['label' => 'Refund Amount', 'value' => $refundAmount];
-                                                    $source_info_changed = true;
-                                                }
-                                                if ($completedTime !== '') {
-                                                    $source_info[] = ['label' => 'Refund Time', 'value' => $completedTime];
-                                                    $source_info_changed = true;
-                                                }
-                                            }
-
-                                            $columns = ['status',  'updated_date'];
-                                            $values = ['refunded', getCurrentDatetime('Y-m-d H:i:s')];
-                                            $condition = 'id ="'.$response_transaction['response'][0]['id'].'"'; 
-
-                                            if ($source_info_changed) {
-                                                $columns[] = 'source_info';
-                                                $values[] = json_encode($source_info, JSON_UNESCAPED_UNICODE);
-                                                $response_transaction['response'][0]['source_info'] = json_encode($source_info, JSON_UNESCAPED_UNICODE);
-                                            }
-
-                                            updateData($db_prefix.'transaction', $columns, $values, $condition);
-
-                                            $response_transaction['response'][0]['status'] = 'refunded';
-
-
-                                            $metadata = json_decode($response_transaction['response'][0]['metadata'], true) ?: [];
-
-                                            $response_gateway = json_decode(getData($db_prefix.'gateways',' WHERE brand_id ="'.$response_transaction['response'][0]['brand_id'].'" AND gateway_id = "'.$response_transaction['response'][0]['gateway_id'].'"'),true);
-
-                                            $gateway = $response_gateway['response'][0]['display'] ?? '';
-
-                                            $customer_info = json_decode($response_transaction['response'][0]['customer_info'], true) ?: [];
-
-                                            $params = [ ':brand_id' => $response_transaction['response'][0]['brand_id'] ];
-
-                                            $response_brand = json_decode(getData($db_prefix.'brands','WHERE brand_id = :brand_id', '* FROM', $params),true);
-
-                                            $net = money_sub(money_add($response_transaction['response'][0]['amount'], $response_transaction['response'][0]['processing_fee']), $response_transaction['response'][0]['discount_amount']);
-
-                                            $transactions = [
-                                                "pp_id" => $response_transaction['response'][0]['ref'],
-                                                "full_name" => $customer_info['name'] ?? 'N/A',
-                                                "email_address" => $customer_info['email'] ?? 'N/A',
-                                                "mobile_number" => $customer_info['mobile'] ?? 'N/A',
-                                                "gateway" => $gateway,
-                                                "amount" => money_round($response_transaction['response'][0]['amount']),
-                                                "fee" => money_round($response_transaction['response'][0]['processing_fee']),
-                                                "discount_amount" => money_round($response_transaction['response'][0]['discount_amount']),
-                                                "total" => money_round($net),
-                                                "local_net_amount" => money_round($response_transaction['response'][0]['local_net_amount']),
-                                                "currency" => $response_transaction['response'][0]['currency'],
-                                                "local_currency" => $response_transaction['response'][0]['local_currency'],
-                                                "metadata" => $metadata, // ← AS-IS
-                                                "sender" => $response_transaction['response'][0]['sender'],
-                                                "transaction_id" => $response_transaction['response'][0]['trx_id'],
-                                                "status" => 'refunded',
-                                                "date" => convertUTCtoUserTZ($response_transaction['response'][0]['created_date'], ($response_brand['response'][0]['timezone'] === '--' || $response_brand['response'][0]['timezone'] === '') ? 'Asia/Dhaka' : $response_brand['response'][0]['timezone'], "M d, Y h:i A")
-                                            ];
-
-                                            echo json_encode($transactions);
-                                        }else{
-                                            http_response_code(400);
-                                            echo json_encode([
-                                                'error' => [
-                                                    'code' => 'INVALID_PP_ID',
-                                                    'message' => 'A valid bp id is required.'
-                                                ]
-                                            ]);
-                                            exit;
-                                        }
-                                    }
-                                }else{
-                                    http_response_code(400);
-                                    echo json_encode([
-                                        'error' => [
-                                            'code'    => 'INVALID_JSON_PAYLOAD',
-                                            'message' => 'The JSON payload is invalid or malformed.'
-                                        ]
-                                    ]);
-                                }
-                            }
+                            echo json_encode($createResult['data']);
+                            break;
                         }
 
+                        // 2. LEGACY CREATE CHARGE: POST /api/create-charge
+                        if ($isLegacyCreateCharge) {
+                            if (!in_array("create_payment", $api_scopes)) {
+                                http_response_code(400);
+                                echo json_encode([
+                                    'error' => [
+                                        'code'    => 'INSUFFICIENT_SCOPE',
+                                        'message' => "The API key does not have the required permission: Create Payment"
+                                    ]
+                                ]);
+                                exit;
+                            }
+
+                            $normalizedPayload = pp_normalize_payment_creation_payload($data);
+                            $createResult = pp_create_payment_transaction($apiRow, $normalizedPayload, 'legacy');
+
+                            if (empty($createResult['status'])) {
+                                http_response_code($createResult['http_code'] ?? 400);
+                                echo json_encode(['error' => $createResult['error']]);
+                                exit;
+                            }
+
+                            echo json_encode($createResult['data']);
+                            break;
+                        }
+
+                        // 3. CHECKOUT POPUP ENDPOINT: POST /api/checkout/popup
+                        if ($isCheckoutPopup) {
+                            if (!in_array("create_payment", $api_scopes)) {
+                                http_response_code(400);
+                                echo json_encode([
+                                    'error' => [
+                                        'code'    => 'INSUFFICIENT_SCOPE',
+                                        'message' => "The API key does not have the required permission: Create Payment"
+                                    ]
+                                ]);
+                                exit;
+                            }
+
+                            $normalizedPayload = pp_normalize_payment_creation_payload($data);
+                            $normalizedPayload['return_url'] = '--';
+                            $createResult = pp_create_payment_transaction($apiRow, $normalizedPayload, 'canonical');
+
+                            if (empty($createResult['status'])) {
+                                http_response_code($createResult['http_code'] ?? 400);
+                                echo json_encode(['error' => $createResult['error']]);
+                                exit;
+                            }
+
+                            echo json_encode($createResult['data']);
+                            break;
+                        }
+
+                        // 3. CANONICAL & LEGACY VERIFY PAYMENT ENDPOINTS:
+                        // Canonical: POST /api/verify-payment
+                        // Legacy alias: POST /api/verify-payments
+                        if ($api_type === 'verify-payment' || $api_type === 'verify-payments') {
+                            if (!in_array("verify_payment", $api_scopes)) {
+                                http_response_code(400);
+                                echo json_encode([
+                                    'error' => [
+                                        'code'    => 'INSUFFICIENT_SCOPE',
+                                        'message' => "The API key does not have the required permission: Verify Payment"
+                                    ]
+                                ]);
+                                exit;
+                            }
+
+                            $verifyResult = pp_verify_payment_transaction($apiRow, $data);
+
+                            if (empty($verifyResult['status'])) {
+                                http_response_code($verifyResult['http_code'] ?? 400);
+                                echo json_encode(['error' => $verifyResult['error']]);
+                                exit;
+                            }
+
+                            echo json_encode($verifyResult['data']);
+                            break;
+                        }
+
+                        // 4. REFUND PAYMENT ENDPOINT:
+                        // Canonical: POST /api/refund-payment
+                        if ($api_type === 'refund-payment') {
+                            if (!in_array("refund_payment", $api_scopes)) {
+                                http_response_code(400);
+                                echo json_encode([
+                                    'error' => [
+                                        'code'    => 'INSUFFICIENT_SCOPE',
+                                        'message' => "The API key does not have the required permission: Refund Payment"
+                                    ]
+                                ]);
+                                exit;
+                            }
+
+                            $pp_id = $data['pp_id'] ?? '';
+
+                            if($pp_id == ""){
+                                http_response_code(400);
+                                echo json_encode([
+                                    'error' => [
+                                        'code' => 'INVALID_PP_ID',
+                                        'message' => 'A valid bp id is required.'
+                                    ]
+                                ]);
+                                exit;
+                            }
+
+                            $params = [ ':ref' => $pp_id, ':brand_id' => $apiRow['brand_id'] ];
+
+                            $response_transaction = json_decode(getData($db_prefix.'transaction','WHERE ref = :ref AND brand_id = :brand_id', '* FROM', $params),true);
+                            if($response_transaction['status'] == true){
+                                if (($response_transaction['response'][0]['status'] ?? '') !== 'completed') {
+                                    http_response_code(400);
+                                    echo json_encode([
+                                        'error' => [
+                                            'code' => 'INVALID_STATUS',
+                                            'message' => 'Only completed transactions can be refunded.'
+                                        ]
+                                    ]);
+                                    exit;
+                                }
+
+                                $transactionRow = $response_transaction['response'][0];
+                                $refundResult = null;
+
+                                $params = [ ':gateway_id' => $transactionRow['gateway_id'], ':brand_id' => $transactionRow['brand_id'] ];
+                                $response_gateway_info = json_decode(getData($db_prefix.'gateways','WHERE gateway_id = :gateway_id AND brand_id = :brand_id', '* FROM', $params),true);
+                                $gateway_slug = $response_gateway_info['response'][0]['slug'] ?? '';
+                                if ($gateway_slug !== 'bkash-api-tokenized') {
+                                    http_response_code(400);
+                                    echo json_encode([
+                                        'error' => [
+                                            'code' => 'REFUND_UNSUPPORTED',
+                                            'message' => 'Refund is not supported for this gateway.'
+                                        ]
+                                    ]);
+                                    exit;
+                                }
+
+                                $refundPayload = [
+                                    'amount' => money_round($transactionRow['local_net_amount']),
+                                    'sku' => $transactionRow['ref'],
+                                    'reason' => 'API refund'
+                                ];
+
+                                $refundResult = pp_bkash_tokenized_refund($transactionRow, $refundPayload);
+
+                                if (empty($refundResult['status'])) {
+                                    http_response_code(400);
+                                    echo json_encode([
+                                        'error' => [
+                                            'code' => 'REFUND_FAILED',
+                                            'message' => $refundResult['message'] ?? 'Refund failed.'
+                                        ]
+                                    ]);
+                                    exit;
+                                } 
+
+                                $source_info = json_decode($transactionRow['source_info'], true) ?: [];
+                                $source_info_changed = false;
+
+                                if (!empty($refundResult['data'])) {
+                                    $refundTrxId = $refundResult['data']['refundTrxId'] ?? '';
+                                    $refundAmount = $refundResult['data']['refundAmount'] ?? '';
+                                    $completedTime = $refundResult['data']['completedTime'] ?? '';
+
+                                    if ($refundTrxId !== '') {
+                                        $source_info[] = ['label' => 'Refund TrxID', 'value' => $refundTrxId];
+                                        $source_info_changed = true;
+                                    }
+                                    if ($refundAmount !== '') {
+                                        $source_info[] = ['label' => 'Refund Amount', 'value' => $refundAmount];
+                                        $source_info_changed = true;
+                                    }
+                                    if ($completedTime !== '') {
+                                        $source_info[] = ['label' => 'Refund Time', 'value' => $completedTime];
+                                        $source_info_changed = true;
+                                    }
+                                }
+
+                                $columns = ['status',  'updated_date'];
+                                $values = ['refunded', getCurrentDatetime('Y-m-d H:i:s')];
+                                $condition = 'id ="'.$response_transaction['response'][0]['id'].'"'; 
+
+                                if ($source_info_changed) {
+                                    $columns[] = 'source_info';
+                                    $values[] = json_encode($source_info, JSON_UNESCAPED_UNICODE);
+                                    $response_transaction['response'][0]['source_info'] = json_encode($source_info, JSON_UNESCAPED_UNICODE);
+                                }
+
+                                updateData($db_prefix.'transaction', $columns, $values, $condition);
+
+                                $response_transaction['response'][0]['status'] = 'refunded';
+
+                                $metadata = json_decode($response_transaction['response'][0]['metadata'], true) ?: [];
+
+                                $response_gateway = json_decode(getData($db_prefix.'gateways',' WHERE brand_id ="'.$response_transaction['response'][0]['brand_id'].'" AND gateway_id = "'.$response_transaction['response'][0]['gateway_id'].'"'),true);
+
+                                $gateway = $response_gateway['response'][0]['display'] ?? '';
+
+                                $customer_info = json_decode($response_transaction['response'][0]['customer_info'], true) ?: [];
+
+                                $params = [ ':brand_id' => $response_transaction['response'][0]['brand_id'] ];
+
+                                $response_brand = json_decode(getData($db_prefix.'brands','WHERE brand_id = :brand_id', '* FROM', $params),true);
+
+                                $net = money_sub(money_add($response_transaction['response'][0]['amount'], $response_transaction['response'][0]['processing_fee']), $response_transaction['response'][0]['discount_amount']);
+
+                                $transactions = [
+                                    "pp_id" => $response_transaction['response'][0]['ref'],
+                                    "full_name" => $customer_info['name'] ?? 'N/A',
+                                    "email_address" => $customer_info['email'] ?? 'N/A',
+                                    "mobile_number" => $customer_info['mobile'] ?? 'N/A',
+                                    "gateway" => $gateway,
+                                    "amount" => money_round($response_transaction['response'][0]['amount']),
+                                    "fee" => money_round($response_transaction['response'][0]['processing_fee']),
+                                    "discount_amount" => money_round($response_transaction['response'][0]['discount_amount']),
+                                    "total" => money_round($net),
+                                    "local_net_amount" => money_round($response_transaction['response'][0]['local_net_amount']),
+                                    "currency" => $response_transaction['response'][0]['currency'],
+                                    "local_currency" => $response_transaction['response'][0]['local_currency'],
+                                    "metadata" => $metadata,
+                                    "sender" => $response_transaction['response'][0]['sender'],
+                                    "transaction_id" => $response_transaction['response'][0]['trx_id'],
+                                    "status" => 'refunded',
+                                    "date" => convertUTCtoUserTZ($response_transaction['response'][0]['created_date'], ($response_brand['response'][0]['timezone'] === '--' || $response_brand['response'][0]['timezone'] === '') ? 'Asia/Dhaka' : $response_brand['response'][0]['timezone'], "M d, Y h:i A")
+                                ];
+
+                                echo json_encode($transactions);
+                            }else{
+                                http_response_code(400);
+                                echo json_encode([
+                                    'error' => [
+                                        'code' => 'INVALID_PP_ID',
+                                        'message' => 'A valid bp id is required.'
+                                    ]
+                                ]);
+                                exit;
+                            }
+                            break;
+                        }
+
+                        http_response_code(400);
+                        echo json_encode([
+                            'error' => [
+                                'code'    => 'INVALID_JSON_PAYLOAD',
+                                'message' => 'The requested API endpoint is invalid.'
+                            ]
+                        ]);
                         break;
 
                     case $path_payment:
