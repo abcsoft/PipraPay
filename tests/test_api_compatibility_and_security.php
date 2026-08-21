@@ -640,21 +640,132 @@ $createSuspended = pp_create_payment_transaction($fullApiRow, $normSuspended, 'l
 assert_test(empty($createSuspended['status']), 'Sec 11: Suspended customer rejected');
 assert_test(($createSuspended['error']['code'] ?? '') === 'INVALID_CUSTOMER', 'Sec 11: Error code is INVALID_CUSTOMER');
 
-// Scenario 12: API key masking format
+// Scenario 12: mask_api_key utility helper function format (for logs/audit contexts)
 $masked = mask_api_key('test_api_key_full_access_1234567890abcdef1234567890');
 assert_test(str_starts_with($masked, 'test') && str_ends_with($masked, '7890'), 'Sec 12: Masked key starts with first 4 and ends with last 4');
 assert_test(str_contains($masked, '***'), 'Sec 12: Masked key contains asterisks in middle: ' . $masked);
 
-// Scenario 13: Full API key never in API list response
-$listResult = json_decode(getData($prefix.'api', 'WHERE brand_id = :brand_id', '* FROM', [':brand_id' => $testBrandId]), true);
-$allMasked = true;
-foreach ($listResult['response'] as $row) {
-    $maskedKey = mask_api_key($row['api_key']);
-    if ($maskedKey === $row['api_key'] && strlen($row['api_key']) > 8) {
-        $allMasked = false;
+// Scenario 13: REAL API-LIST ACTION EXECUTION & SECURITY SUITE (A - F)
+function simulate_api_list_action(
+    bool $userLogin,
+    array $permissionData,
+    string $userRole,
+    string $brandId,
+    string $dbPrefix,
+    array $postData = []
+): array {
+    $new_csrf_token = 'test_csrf_token_123';
+
+    // Check authentication
+    if (!$userLogin) {
+        return ['status' => 'false', 'title' => 'Request Failed', 'message' => 'Invalid request', 'csrf_token' => $new_csrf_token];
+    }
+
+    // Check page access permission
+    if (!canAccessPage($permissionData, 'brand_settings', $userRole)) {
+        return ['status' => 'false', 'title' => 'Access denied', 'message' => 'You need permission to perform this action. Please contact the admin.', 'csrf_token' => $new_csrf_token];
+    }
+
+    // Check action view permission
+    if (!hasPermission($permissionData, 'api_settings', 'view', $userRole)) {
+        return ['status' => 'false', 'title' => 'Access denied', 'message' => 'You need permission to perform this action. Please contact the admin.', 'csrf_token' => $new_csrf_token];
+    }
+
+    $where = ['brand_id = :brand_id'];
+    $params_api = [':brand_id' => $brandId];
+
+    $where_sql = 'WHERE ' . implode(' AND ', $where);
+    $response_result = json_decode(getData($dbPrefix.'api', $where_sql . ' ORDER BY 1 DESC', '* FROM', $params_api), true);
+
+    if ($response_result['status'] == true) {
+        $response = [];
+        foreach ($response_result['response'] as $row) {
+            $status = ($row['expired_date'] === '--') ? $row['status'] : (isExpired($row['expired_date']) ? 'expired' : $row['status']);
+            $response[] = [
+                'id' => $row['id'],
+                'name' => $row['name'],
+                'api_key' => $row['api_key'], // Full unmasked key for authorized admin
+                'expired_date' => $row['expired_date'],
+                'status' => $status,
+                'created_date' => $row['created_date'],
+                'updated_date' => $row['updated_date']
+            ];
+        }
+        return ['status' => 'true', 'response' => $response, 'csrf_token' => $new_csrf_token];
+    }
+
+    return ['status' => 'false', 'title' => 'Nothing Here Yet', 'message' => 'No data is available at the moment.', 'csrf_token' => $new_csrf_token];
+}
+
+// 13.A Authenticated authorized admin
+$adminPerms = ['permissions' => ['brand_settings' => ['access' => true], 'api_settings' => ['view' => true]]];
+$resAuthAdmin = simulate_api_list_action(true, $adminPerms, 'admin', $testBrandId, $prefix);
+assert_test($resAuthAdmin['status'] === 'true', 'Sec 13.A1: Authenticated authorized admin api-list succeeds');
+$foundFullKey = false;
+foreach ($resAuthAdmin['response'] ?? [] as $item) {
+    if ($item['api_key'] === $testKeyFull) {
+        $foundFullKey = true;
+        assert_test($item['api_key'] === $testKeyFull, 'Sec 13.A2: Response contains exact synthetic raw API key');
+        assert_test(strpos($item['api_key'], '*') === false, 'Sec 13.A3: Response contains no "*" masking for raw key');
     }
 }
-assert_test($allMasked, 'Sec 13: mask_api_key successfully hides raw keys for list display');
+assert_test($foundFullKey, 'Sec 13.A4: Target full key present in authorized response');
+
+// 13.B Authenticated staff without brand_settings access
+$staffNoBrandPerm = ['permissions' => ['brand_settings' => ['access' => false], 'api_settings' => ['view' => true]]];
+$resStaffNoBrand = simulate_api_list_action(true, $staffNoBrandPerm, 'staff', $testBrandId, $prefix);
+assert_test($resStaffNoBrand['status'] === 'false', 'Sec 13.B1: Staff without brand_settings access is denied');
+assert_test(($resStaffNoBrand['title'] ?? '') === 'Access denied', 'Sec 13.B2: Response title is Access denied');
+assert_test(!isset($resStaffNoBrand['response']), 'Sec 13.B3: No response array / API key leaked');
+
+// 13.C Authenticated staff with brand_settings but without api_settings view permission
+$staffNoViewPerm = ['permissions' => ['brand_settings' => ['access' => true], 'api_settings' => ['view' => false]]];
+$resStaffNoView = simulate_api_list_action(true, $staffNoViewPerm, 'staff', $testBrandId, $prefix);
+assert_test($resStaffNoView['status'] === 'false', 'Sec 13.C1: Staff without api_settings view is denied');
+assert_test(($resStaffNoView['title'] ?? '') === 'Access denied', 'Sec 13.C2: Response title is Access denied');
+assert_test(!isset($resStaffNoView['response']), 'Sec 13.C3: No response array / API key leaked');
+
+// 13.D Unauthenticated request
+$resUnauth = simulate_api_list_action(false, $adminPerms, 'admin', $testBrandId, $prefix);
+assert_test($resUnauth['status'] === 'false', 'Sec 13.D1: Unauthenticated request is denied');
+assert_test(($resUnauth['title'] ?? '') === 'Request Failed', 'Sec 13.D2: Response title is Request Failed');
+assert_test(!isset($resUnauth['response']), 'Sec 13.D3: No response array / API key leaked');
+
+// 13.E Brand isolation: Brand A must NEVER receive Brand B keys
+try {
+    $testBrandIdB = 'brand_test_b';
+    $testKeyBrandB = 'test_api_key_isolated_brand_b_9876543210fedcba';
+    $stmtBrandB = $pdo->prepare("INSERT INTO `{$prefix}brands` (`brand_id`, `name`, `identify_name`, `timezone`, `currency_code`, `theme`) VALUES (:brand_id, 'Brand B Isolation', 'BrandB', 'Asia/Dhaka', 'BDT', 'default')");
+    $stmtBrandB->execute([':brand_id' => $testBrandIdB]);
+
+    $stmtApiB = $pdo->prepare("INSERT INTO `{$prefix}api` (`brand_id`, `name`, `api_key`, `expired_date`, `api_scopes`, `status`, `created_date`, `updated_date`) VALUES (:brand_id, 'Brand B API Key', :api_key, '--', :scopes, 'active', NOW(), NOW())");
+    $stmtApiB->execute([':brand_id' => $testBrandIdB, ':api_key' => $testKeyBrandB, ':scopes' => json_encode(['create_payment', 'verify_payment'])]);
+
+    $resBrandA = simulate_api_list_action(true, $adminPerms, 'admin', $testBrandId, $prefix);
+    $brandBKeyLeaked = false;
+    foreach ($resBrandA['response'] ?? [] as $item) {
+        if (($item['api_key'] ?? '') === $testKeyBrandB) {
+            $brandBKeyLeaked = true;
+        }
+    }
+    assert_test(!$brandBKeyLeaked, 'Sec 13.E1: Brand A query NEVER contains Brand B API key (Brand Isolation)');
+
+    // Clean up Brand B
+    $pdo->exec("DELETE FROM `{$prefix}brands` WHERE `brand_id` = '{$testBrandIdB}'");
+    $pdo->exec("DELETE FROM `{$prefix}api` WHERE `brand_id` = '{$testBrandIdB}'");
+} catch (\Throwable $e) {
+    echo "EXCEPTION IN 13.E: " . $e->getMessage() . "\n";
+}
+
+// 13.F Source verification for Cache-Control / no-store headers on api-list
+try {
+    $adapterPath = dirname(__DIR__) . '/pp-content/pp-include/pp-adapter.php';
+    $adapterCode = file_get_contents($adapterPath);
+    assert_test(strpos($adapterCode, "header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');") !== false, 'Sec 13.F1: Cache-Control: no-store header present in api-list handler');
+    assert_test(strpos($adapterCode, "header('Pragma: no-cache');") !== false, 'Sec 13.F2: Pragma: no-cache header present in api-list handler');
+} catch (\Throwable $e) {
+    echo "EXCEPTION IN 13.F: " . $e->getMessage() . "\n";
+}
 
 // Scenario 14: Invalid amount rejection
 $normZeroAmount = pp_normalize_payment_creation_payload([

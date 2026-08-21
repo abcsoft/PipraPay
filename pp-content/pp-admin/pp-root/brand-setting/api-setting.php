@@ -131,7 +131,7 @@
                     <div class="alert alert-info mx-3 mt-3 mb-0" role="alert">
                         <div class="d-flex align-items-center">
                             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon me-2"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 9v4" /><path d="M12 16v.01" /><path d="M5 19h14a2 2 0 0 0 1.84 -2.75l-7 -12a2 2 0 0 0 -3.68 0l-7 12a2 2 0 0 0 1.84 2.75" /></svg>
-                            <div>For security, the full API key is shown only once when created.</div>
+                            <div>API keys are displayed in full to authorized administrators. Keep them secure and do not share them.</div>
                         </div>
                     </div>
 
@@ -490,7 +490,7 @@
         </div>
     </div>
 </div>
-<!-- Modal for One-Time New API Key Display -->
+<!-- Modal for New API Key Display -->
 <div class="modal modal-blur fade" id="modal-createdKeySuccess" tabindex="-1" role="dialog" aria-hidden="true" data-bs-backdrop="static">
     <div class="modal-dialog modal-dialog-centered" role="document">
         <div class="modal-content">
@@ -506,7 +506,7 @@
                         </div>
                         <div>
                             <h4 class="alert-title">Important Notice</h4>
-                            <div class="text-secondary">For security, the full API key is shown only once when created. Copy and store it securely.</div>
+                            <div class="text-secondary">API keys are displayed in full to authorized administrators. Keep them secure and do not share them.</div>
                         </div>
                     </div>
                 </div>
@@ -514,7 +514,7 @@
                     <label class="form-label">Your New API Key</label>
                     <div class="input-group">
                         <input type="text" id="newlyCreatedApiKeyInput" class="form-control" readonly>
-                        <button class="btn btn-primary" type="button" onclick="copyContent(document.getElementById('newlyCreatedApiKeyInput').value, 'Copied!', 'API Key copied successfully.')">
+                        <button class="btn btn-primary" type="button" onclick="copyContent(document.getElementById('newlyCreatedApiKeyInput').value, 'Copied!', 'API key copied successfully.')">
                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-copy"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666" /><path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1" /></svg> Copy
                         </button>
                     </div>
@@ -763,7 +763,7 @@
                                 <td>
                                     <div class="input-group" style=" max-width: 250px; min-width: 250px; ">
                                        <input type="text" value="${escapeHtml(item.api_key)}" class="form-control" readonly>
-                                       <button class="btn btn-icon" type="button" onclick="copyContent('${escapeHtml(item.api_key)}', 'Copied!', 'Api Key copied successfully.')"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-copy"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666" /><path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1" /></svg></button>
+                                       <button class="btn btn-icon" type="button" onclick="copyContent(this.closest('.input-group').querySelector('input').value, 'Copied!', 'API key copied successfully.')"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-copy"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666" /><path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1" /></svg></button>
                                     </div>
                                 </td>
                                 <td ${redirectEdit}>${escapeHtml(item.created_date)}</td>

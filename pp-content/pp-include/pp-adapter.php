@@ -5099,6 +5099,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
             }
 
             if($action == "api-list"){
+                header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+                header('Pragma: no-cache');
                 if($global_user_login == true){
                     if (!canAccessPage(json_decode($global_response_permission['response'][0]['permission'], true), 'brand_settings', $global_user_response['response'][0]['role'])) {
                         echo json_encode(['status' => 'false', 'title' => 'Access denied', 'message' => 'You need permission to perform this action. Please contact the admin.' , 'csrf_token' => $new_csrf_token]);
@@ -5168,7 +5170,7 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             $response[] = [
                                 "id"    => $row['id'],
                                 "name"  => $row['name'],
-                                "api_key"  => mask_api_key($row['api_key']),
+                                "api_key"  => $row['api_key'],
                                 "expired_date"  => $row['expired_date'],
                                 "status"  => $status,
                                 "created_date"     => convertUTCtoUserTZ($row['created_date'], ($global_response_brand['response'][0]['timezone'] === '--' || $global_response_brand['response'][0]['timezone'] === '') ? 'Asia/Dhaka' : $global_response_brand['response'][0]['timezone'], "M d, Y h:i A"),
