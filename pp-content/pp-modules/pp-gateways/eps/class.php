@@ -110,8 +110,8 @@
                 'transactionTypeId' => 1, // Web
                 'totalAmount' => $data['transaction']['local_net_amount'],
                 'successUrl' => pp_callback_url(),
-                'failUrl' => pp_checkout_address(),
-                'cancelUrl' => pp_checkout_address(),
+                'failUrl' => pp_checkout_address() . '?manual=1',
+                'cancelUrl' => pp_checkout_address() . '?manual=1',
                 'customerName' => trim($data['transaction']['customer']['name']),
                 'customerEmail' => $data['transaction']['customer']['email'],
                 'customerAddress' => 'N/A',
@@ -148,7 +148,34 @@
             
             $redirectUrl = $initData['RedirectURL'];
             
-            echo '<script>location.href="' . $redirectUrl . '";</script>';
+            // Experimental sandbox-only iframe mode. Production retains hosted redirect.
+            // EPS can block framing using CSP / X-Frame-Options or during 3DS.
+            // Never attempt to bypass the provider's frame restrictions.
+            $embedPreview = (($data['options']['mode'] ?? 'sandbox') === 'sandbox')
+                && (($_GET['eps_embed_preview'] ?? '') === '1');
+            $host = strtolower((string) parse_url((string) $redirectUrl, PHP_URL_HOST));
+            $isEpsHost = $host === 'eps.com.bd' || str_ends_with($host, '.eps.com.bd');
+            $isHttps = strtolower((string) parse_url((string) $redirectUrl, PHP_URL_SCHEME)) === 'https';
+
+            if (!$isHttps || !$isEpsHost) {
+                http_response_code(502);
+                echo '<center>EPS returned an unexpected checkout address.</center>';
+                return;
+            }
+
+            if ($embedPreview) {
+                $safeRedirect = htmlspecialchars($redirectUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+                echo '<div style="max-width:750px;margin:12px auto;padding:16px;background:#fff;border:1px solid #dee2e6;border-radius:12px">';
+                echo '<h3 style="font-size:18px">EPS Sandbox Checkout (Experimental)</h3>';
+                echo '<p>This embedded payment window might be blocked by EPS or your bank. If it does not load, use the secure EPS page instead.</p>';
+                echo '<iframe title="EPS sandbox payment" src="' . $safeRedirect . '" style="display:block;width:100%;height:650px;border:1px solid #ddd;border-radius:8px" referrerpolicy="strict-origin-when-cross-origin"></iframe>';
+                echo '<p style="margin-top:12px"><a target="_top" rel="noopener" href="' . $safeRedirect . '">Open secure EPS payment page instead</a></p>';
+                echo '</div>';
+                return;
+            }
+
+            header('Cache-Control: no-store, private');
+            echo '<script>window.location.replace(' . json_encode($redirectUrl, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) . ');</script>';
         }
 
         function callback($data = []){

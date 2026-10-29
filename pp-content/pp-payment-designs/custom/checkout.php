@@ -53,6 +53,22 @@
         }
     }
 
+    // Single-gateway shortcut: only EPS hosted checkout is eligible.
+    // Leave all multi-gateway and non-EPS checkout behavior unchanged.
+    // The opt-out parameter is useful if a payment initialization fails.
+    if (count($allGateways) === 1 && !isset($_GET['manual']) && !isset($_GET['gateway'])) {
+        $onlyGateway = reset($allGateways);
+        if (($onlyGateway['slug'] ?? '') === 'eps' && !empty($onlyGateway['gateway_id'])) {
+            $target = pp_checkout_address() . '?gateway=' . rawurlencode((string)$onlyGateway['gateway_id']) . '&auto_eps=1';
+            if (!headers_sent()) {
+                header('Location: ' . $target, true, 302);
+            } else {
+                echo '<script>window.location.replace(' . json_encode($target, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) . ');</script>';
+            }
+            exit;
+        }
+    }
+
     // Classify into exact 3 categories: Cards, Mobile Banking, Net Banking
     $categorizedGateways = [
         'cards'          => [],
