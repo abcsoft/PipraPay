@@ -110,8 +110,8 @@
                 'transactionTypeId' => 1, // Web
                 'totalAmount' => $data['transaction']['local_net_amount'],
                 'successUrl' => pp_callback_url(),
-                'failUrl' => pp_checkout_address(),
-                'cancelUrl' => pp_checkout_address(),
+                'failUrl' => pp_checkout_address() . '?manual=1',
+                'cancelUrl' => pp_checkout_address() . '?manual=1',
                 'customerName' => trim($data['transaction']['customer']['name']),
                 'customerEmail' => $data['transaction']['customer']['email'],
                 'customerAddress' => 'N/A',
