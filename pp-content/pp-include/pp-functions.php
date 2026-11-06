@@ -12,6 +12,8 @@
 
     $pp_functions_loaded = true;
     
+    require_once __DIR__ . '/pp-checkout-helpers.php';
+
     function pp_site_url($type = "Full") {
         // Detect protocol with reverse proxy support
         $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') 
@@ -3879,72 +3881,110 @@
         return false;
     }
 
-    function pp_custom_payment_category($gateway) {
-        if (empty($gateway)) {
-            return 'cards';
+    /**
+     * Read a namespaced value from a transaction's metadata JSON document.
+     *
+     * Used by gateways that need to remember provider state (for example the
+     * hosted checkout session created for a transaction) without adding a
+     * schema migration.
+     *
+     * @return array The stored value, or an empty array when absent/invalid.
+     */
+    function pp_gateway_meta_get($ref, $key)
+    {
+        global $db_prefix;
+
+        $ref = trim((string) $ref);
+        $key = trim((string) $key);
+
+        if ($ref === '' || $key === '') {
+            return [];
         }
 
-        $slug = '';
-        $tab = '';
-        if (is_string($gateway)) {
-            $slug = trim($gateway);
-        } elseif (isset($gateway['slug'])) {
-            $slug = trim($gateway['slug']);
-            $tab = strtolower(trim((string)($gateway['tab'] ?? '')));
-        } elseif (isset($gateway['gateway']['slug'])) {
-            $slug = trim($gateway['gateway']['slug']);
-            $tab = strtolower(trim((string)($gateway['gateway']['tab'] ?? '')));
-        }
-
-        $slug = strtolower($slug);
-
-        if ($tab === 'bank' || $slug === 'bank' || strpos($slug, 'bank') !== false) {
-            return 'net_banking';
-        }
-
-        $gatewayFile = __DIR__ . '/../pp-modules/pp-gateways/' . $slug . '/class.php';
-        $info = [];
-        if (file_exists($gatewayFile)) {
-            require_once $gatewayFile;
-            $class = str_replace(' ', '', ucwords(str_replace('-', ' ', $slug))) . 'Gateway';
-            if (class_exists($class)) {
-                $instance = new $class();
-                if (method_exists($instance, 'info')) {
-                    $info = $instance->info() ?? [];
-                }
+        try {
+            $pdo = connectDatabase();
+            if (!$pdo instanceof PDO) {
+                return [];
             }
+
+            $stmt = $pdo->prepare("SELECT `metadata` FROM `{$db_prefix}transaction` WHERE `ref` = :ref LIMIT 1");
+            $stmt->execute([':ref' => $ref]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$row) {
+                return [];
+            }
+
+            $metadata = json_decode((string) $row['metadata'], true);
+            if (!is_array($metadata) || !isset($metadata[$key]) || !is_array($metadata[$key])) {
+                return [];
+            }
+
+            return $metadata[$key];
+        } catch (Throwable $e) {
+            error_log('[Gateway Meta] read failed: ' . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * Merge a namespaced value into a transaction's metadata JSON document.
+     *
+     * The row is locked while read-modify-writing so that two concurrent
+     * workers cannot drop each other's metadata. Failures are logged but never
+     * thrown: metadata is auxiliary state and must not break a checkout.
+     */
+    function pp_gateway_meta_set($ref, $key, array $value)
+    {
+        global $db_prefix;
+
+        $ref = trim((string) $ref);
+        $key = trim((string) $key);
+
+        if ($ref === '' || $key === '') {
+            return false;
         }
 
-        $senderKey = strtolower(trim((string)($info['sender_key'] ?? '')));
-        $gwTab     = strtolower(trim((string)($info['tab'] ?? $tab)));
+        try {
+            $pdo = connectDatabase();
+            if (!$pdo instanceof PDO) {
+                return false;
+            }
 
-        if ($gwTab === 'bank') {
-            return 'net_banking';
+            $pdo->beginTransaction();
+
+            $stmt = $pdo->prepare("SELECT `metadata` FROM `{$db_prefix}transaction` WHERE `ref` = :ref AND `status` = 'initiated' FOR UPDATE");
+            $stmt->execute([':ref' => $ref]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$row) {
+                $pdo->rollBack();
+                return false;
+            }
+
+            $metadata = json_decode((string) $row['metadata'], true);
+            if (!is_array($metadata)) {
+                $metadata = [];
+            }
+
+            $metadata[$key] = $value;
+
+            $update = $pdo->prepare("UPDATE `{$db_prefix}transaction` SET `metadata` = :metadata WHERE `ref` = :ref AND `status` = 'initiated'");
+            $update->execute([
+                ':metadata' => json_encode($metadata, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                ':ref'      => $ref,
+            ]);
+
+            $pdo->commit();
+
+            return $update->rowCount() === 1;
+        } catch (Throwable $e) {
+            if (isset($pdo) && $pdo instanceof PDO && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            error_log('[Gateway Meta] write failed: ' . $e->getMessage());
+            return false;
         }
-
-        $knownMfsKeys = [
-            'bkash', 'nagad', 'rocket', 'upay', 'cellfin', 'tap', 
-            'ipay', 'mcash', 'okwallet', 'pathaopay', 'telecash'
-        ];
-        $knownMfsSlugs = [
-            'bkash-personal', 'bkash-merchant', 'bkash-agent', 'bkash-api-tokenized',
-            'nagad-personal', 'nagad-merchant', 'nagad-agent', 'nagad-merchant-api',
-            'rocket-personal', 'rocket-merchant', 'rocket-agent',
-            'upay-personal', 'upay-merchant', 'upay-agent',
-            'cellfin-personal', 'cellfin-merchant',
-            'tap-personal', 'tap-merchant', 'tap-agent',
-            'ipay-personal', 'ipay-merchant',
-            'mcash-personal', 'mcash-merchant', 'mcash-agent',
-            'okwallet-personal', 'okwallet-merchant', 'okwallet-agent',
-            'pathaopay-personal', 'pathaopay-merchant', 'pathaopay-merchant-api',
-            'telecash-personal', 'telecash-merchant', 'telecash-agent'
-        ];
-
-        if (in_array($senderKey, $knownMfsKeys, true) || in_array($slug, $knownMfsSlugs, true)) {
-            return 'mobile_banking';
-        }
-
-        return 'cards';
     }
 
     function ensurePersonalPaymentSessionsTable() {

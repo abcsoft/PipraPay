@@ -95,8 +95,43 @@
     $txnAmount = money_round($data['transaction']['amount'], 2);
     $currency = htmlspecialchars($data['transaction']['currency'] ?? 'BDT');
     $currencySymbol = ($currency === 'BDT') ? '৳' : $currency;
-?>
 
+    // ---- EPS automatic checkout (Cards category) -------------------------
+    // When EPS is the only eligible gateway in the Cards category the customer
+    // must not have to pick a gateway card and press "Pay" again: the hosted
+    // EPS checkout is started immediately. `?manual=1` is the documented
+    // opt-out and `?eps_error=...` prevents a redirect loop after a failure.
+    $checkoutAddress = pp_checkout_address();
+
+    $autoTarget = function_exists('pp_custom_auto_checkout_target')
+        ? pp_custom_auto_checkout_target($categorizedGateways, $checkoutAddress, $_GET)
+        : ['auto' => false, 'reason' => '', 'url' => ''];
+
+    if (!empty($autoTarget['auto']) && !empty($autoTarget['url'])) {
+        if (!headers_sent()) {
+            header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+            header('Location: ' . $autoTarget['url'], true, 302);
+        }
+
+        // Fallback for hosts that already flushed the response headers.
+        echo '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex">'
+            . '<meta http-equiv="refresh" content="0;url=' . htmlspecialchars($autoTarget['url'], ENT_QUOTES, 'UTF-8') . '">'
+            . '</head><body><p>Redirecting to the secure payment page&hellip;</p>'
+            . '<p><a href="' . htmlspecialchars($autoTarget['url'], ENT_QUOTES, 'UTF-8') . '">Continue to payment</a></p>'
+            . '</body></html>';
+        exit();
+    }
+
+    $epsErrorCode = '';
+    if (isset($_GET['eps_error']) && is_string($_GET['eps_error'])) {
+        $epsErrorCode = strtoupper(preg_replace('/[^A-Za-z0-9_]/', '', $_GET['eps_error']));
+        $epsErrorCode = substr($epsErrorCode, 0, 48);
+    }
+
+    $epsErrorMessage = ($epsErrorCode !== '' && function_exists('pp_eps_checkout_error_message'))
+        ? pp_eps_checkout_error_message($epsErrorCode)
+        : '';
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -179,6 +214,11 @@
                 </div>
             </div>
 
+            <?php if ($epsErrorMessage !== ''): ?>
+                <div class="eps-checkout-alert" role="alert" style="margin: 0 0 14px 0; padding: 12px 14px; border-radius: 10px; border: 1px solid #f0b3b3; background: #fff5f5; color: #8a1f1f; font-size: 13px; line-height: 1.45;">
+                    <?php echo htmlspecialchars($epsErrorMessage, ENT_QUOTES, 'UTF-8'); ?>
+                </div>
+            <?php endif; ?>
             <!-- Modern Compact Category Navbar / Nav-Pills (Cards, Mobile Banking, Net Banking) -->
             <div class="category-tabs">
                 <?php if (!empty($categorizedGateways['cards'])): ?>
