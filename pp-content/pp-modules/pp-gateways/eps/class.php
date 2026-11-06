@@ -630,12 +630,22 @@
             $options = is_array($data['options'] ?? null) ? $data['options'] : [];
 
             $settings = [];
+            $missingFields = [];
+
             foreach (['merchant_id', 'store_id', 'username', 'password', 'hashkey'] as $field) {
                 $value = isset($options[$field]) && is_scalar($options[$field]) ? trim((string) $options[$field]) : '';
+
                 if ($value === '') {
-                    return $this->fail('EPS_CONFIG_INCOMPLETE', ['field' => $field]);
+                    $missingFields[] = $field;
+                    continue;
                 }
+
                 $settings[$field] = $value;
+            }
+
+            if (!empty($missingFields)) {
+                // One line lists everything the operator still has to supply.
+                return $this->fail('EPS_CONFIG_INCOMPLETE', ['missing' => implode('+', $missingFields)]);
             }
 
             $mode = isset($options['mode']) && is_scalar($options['mode']) ? strtolower(trim((string) $options['mode'])) : '';
