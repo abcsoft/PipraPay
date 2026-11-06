@@ -217,6 +217,13 @@ validation and fallback layers do not depend on them.
 - **Customer data.** A missing/invalid email falls back to
   `noreply@<merchant-host>`; a missing phone number aborts with
   `EPS_CUSTOMER_INVALID` instead of creating a session that cannot complete.
+- **No session data in merchant-visible metadata.** The hosted session is
+  removed from `pp_transaction.metadata` immediately before the transaction is
+  completed, because completion payloads echo metadata to merchant webhooks and
+  API responses. During the short pre-payment window the `eps_checkout` key is
+  still present in the row (visible to the merchant's own API calls); it holds
+  no credentials, only the provider checkout URL, merchant transaction id and a
+  timestamp.
 - **Logging.** `error_log('[EPS] CODE | key=value …')` with values stripped to
   `[A-Za-z0-9_.:@/+-]`, truncated to 120 characters. Tokens, passwords, hash
   keys, signatures and full provider URLs are never logged.
@@ -330,6 +337,8 @@ mysqldump --single-transaction --routines <db> > ~/backup_db_$(date +%F_%H%M).sq
 
 # 1. Fetch the reviewed branch (never force-push, never reset --hard).
 cd public_html
+# Prerequisite: the branch must have been pushed to origin first (it is local only
+# at the time of writing). Then:
 git fetch origin fix/eps-checkout-hardening
 git checkout fix/eps-checkout-hardening
 
@@ -369,12 +378,24 @@ sudo systemctl restart lsws
 ```
 
 If only the EPS gateway misbehaves, disable the gateway in the admin panel — no
-code change is needed. Remove the new files only if the rollback target does not
-already contain them:
+code change is needed.
+
+The new files are untracked by the stable commit, so `git checkout` leaves them on
+disk. They are inert afterwards, but if you want them gone, remove them **only
+after** the checked-out `pp-functions.php` no longer requires the helper:
 
 ```bash
+# 1) revert first
+git checkout 038fd7fe77bea613e6a6fd5353f0fa0dc19e2999
+grep -c "pp-checkout-helpers" pp-content/pp-include/pp-functions.php   # must print 0
+# 2) only then remove the untracked additions
 rm -f pp-content/pp-include/pp-checkout-helpers.php
+rm -rf tests/fixtures tests/test_eps_gateway.php tests/test_eps_checkout_template.php
+rm -f docs/eps-integration.md
 ```
+
+Deleting `pp-checkout-helpers.php` while `pp-functions.php` still requires it
+would fatal every request: keep the order above.
 
 `pp_transaction.metadata` values written by this integration are additive JSON
 keys (`eps_checkout`); leaving them in place is harmless after a rollback.

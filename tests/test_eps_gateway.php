@@ -544,6 +544,7 @@ check('Verified successful payment completes the transaction', $result['ok'] ===
 check('Completion uses the EPS transaction id', ($gw->completions[0]['trxid'] ?? '') === 'eps-1', (string) ($gw->completions[0]['trxid'] ?? ''));
 check('Completion records the gateway id', ($gw->completions[0]['gateway_id'] ?? '') === 'gw_eps');
 check('Status check is a server-side call', count($gw->getCalls) === 1 && strpos($gw->getCalls[0]['url'], 'CheckMerchantTransactionStatus') !== false);
+check('Stored hosted session is cleared before completion', empty($gw->sessions['TXN-1']));
 
 // Duplicate callback: transaction already completed
 $gw = new TestEpsGateway();
@@ -567,12 +568,14 @@ check('Lost completion race does not report success', $rejected['ok'] === false 
 
 // Provider says the payment failed
 $gw = new TestEpsGateway();
+$gw->sessions['TXN-1'] = ['merchant_transaction_id' => 'mtx-1', 'created_at' => time()];
 $gw->postQueue = [eps_token()];
 $gw->getQueue = [eps_status('TXN-1', ['Status' => 'Failed'])];
 reset_get(['MerchantTransactionId' => 'mtx-1', 'EPSTransactionId' => 'eps-1']);
 $failed = $gw->verify($callbackData);
 reset_get();
 check('Failed payment is not marked completed', $failed['ok'] === false && count($gw->completions) === 0);
+check('Failed payment keeps the hosted session for retry', !empty($gw->sessions['TXN-1']));
 
 // Browser claims success but the provider disagrees (spoofed redirect)
 $gw = new TestEpsGateway();

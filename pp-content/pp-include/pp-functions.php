@@ -3931,8 +3931,10 @@
      * Merge a namespaced value into a transaction's metadata JSON document.
      *
      * The row is locked while read-modify-writing so that two concurrent
-     * workers cannot drop each other's metadata. Failures are logged but never
-     * thrown: metadata is auxiliary state and must not break a checkout.
+     * workers cannot drop each other's metadata. Passing an empty array removes
+     * the namespaced value instead of storing an empty document. Failures are
+     * logged but never thrown: metadata is auxiliary state and must not break a
+     * checkout.
      */
     function pp_gateway_meta_set($ref, $key, array $value)
     {
@@ -3967,7 +3969,11 @@
                 $metadata = [];
             }
 
-            $metadata[$key] = $value;
+            if ($value === []) {
+                unset($metadata[$key]);
+            } else {
+                $metadata[$key] = $value;
+            }
 
             $update = $pdo->prepare("UPDATE `{$db_prefix}transaction` SET `metadata` = :metadata WHERE `ref` = :ref AND `status` = 'initiated'");
             $update->execute([

@@ -418,6 +418,12 @@
                 ];
             }
 
+            // The hosted session is only needed until the payment is settled.
+            // Removing it here keeps gateway-internal state (including the
+            // provider checkout URL) out of the transaction metadata that is
+            // echoed to merchant webhooks and API responses.
+            $this->saveSession($reference, []);
+
             $completed = $this->completeTransaction(
                 $reference,
                 (string) ($data['gateway']['gateway_id'] ?? ''),
