@@ -45,6 +45,7 @@ Implemented in `pp_custom_auto_checkout_target()` (`pp-content/pp-include/pp-che
 | EPS inactive, or amount outside `min_allow`/`max_allow` | gateway not in the bucket → no auto-start |
 | `?manual=1` | normal selection (documented opt-out) |
 | `?eps_error=...` present | normal selection + banner (loop protection) |
+| `pp_callback` present (provider return) | normal render; never redirected again |
 | malformed `gateway_id` | refused |
 | any other slug as the only card gateway | normal selection |
 

@@ -240,6 +240,14 @@
                 return $result;
             }
 
+            // A provider return must never be turned into another redirect: the
+            // callback handler lives behind the gateway parameters, and a second
+            // 302 would drop `pp_callback` and loop.
+            if (array_key_exists('pp_callback', $query)) {
+                $result['reason'] = 'provider_callback';
+                return $result;
+            }
+
             if (isset($query['eps_error']) && $query['eps_error'] !== '' && $query['eps_error'] !== null) {
                 $result['reason'] = 'recent_failure';
                 return $result;

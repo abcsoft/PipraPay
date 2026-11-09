@@ -309,6 +309,13 @@ check('Manual override (?manual=1) disables the automatic start', $target['auto'
 $target = pp_custom_auto_checkout_target($epsOnlyCards, $base, ['eps_error' => 'EPS_INIT_HTTP']);
 check('A recent failure prevents a redirect loop', $target['auto'] === false && $target['reason'] === 'recent_failure', $target['reason']);
 
+$target = pp_custom_auto_checkout_target($epsOnlyCards, $base, ['pp_callback' => '']);
+check(
+    'A provider callback is never auto-redirected',
+    $target['auto'] === false && $target['reason'] === 'provider_callback',
+    $target['reason']
+);
+
 $target = pp_custom_auto_checkout_target($epsOnlyCards, $base . '?lang=bn', ['lang' => 'bn']);
 check(
     'Existing query parameters are preserved when building the auto URL',
