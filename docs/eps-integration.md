@@ -477,3 +477,45 @@ claim may be taken over.
 `36 s (token) + 30 s (initialisation) ≈ 66 s`, during which the loading indicator
 is already painted (output is flushed before the first provider call). No path
 leaves the spinner spinning: every branch ends in a redirect or an error screen.
+### 12.1 Token response carriers and shape diagnostics
+
+`GetToken` has returned a bearer token under more than one carrier. Extraction
+is evidence-gated and ordered:
+
+| Priority | Carrier | Status |
+|---|---|---|
+| 1 | top-level `token` | verified — produced real sessions in production |
+| 2 | top-level `Token` | accepted (provider casing change) |
+| 3 | `accessToken`, `access_token` | accepted (JWT naming) |
+| 4 | nested `data.token` / `data.Token` / `data.accessToken` / `data.access_token` | accepted (wrapped response) |
+
+Every candidate must pass the same validation before it is used: trimmed,
+printable ASCII in `[A-Za-z0-9._~+/=-]`, length 8–4096. Numbers, objects, HTML,
+sentences and empty values are refused. An HTTP 200 without a usable token stays
+`EPS_AUTH_NO_TOKEN` and is **not** retried, so a credential/account rejection is
+never masked as a transient failure.
+
+The success line records which carrier was used (`carrier=token`), never a value.
+
+When no token is usable, one sanitized fingerprint is logged with the attempt and
+the terminal failure:
+
+```
+[EPS] EPS_AUTH_ATTEMPT | attempt=1 | of=2 | outcome=no_token | structure=keys:Status:s6,message:s28,token:null;codes:Status=Failed | http=200 | errno=0
+```
+
+Reading it:
+
+| Fingerprint | Meaning |
+|---|---|
+| `keys:token:sNNN` | token present as a string, so validation (length/charset) is the problem |
+| `keys:Token:sNNN` | capitalised carrier — handled since this build |
+| `data{token:sNNN}` | nested carrier — handled since this build |
+| `keys:Status:s6;codes:Status=Failed` | provider returned an authentication failure object with HTTP 200 → credentials / account configuration, not a network problem |
+| `keys:message:sNN` with no code | unclassified provider message; escalate with the code list |
+| `empty_object` / `not_json` | provider returned an empty body or non-JSON (WAF, HTML error page) |
+
+Only key names, value types, string lengths and allowlisted status/code values
+(`status`, `code`, `responseCode`, `errorCode`, `result`, `state`, `statusCode`)
+are recorded, sanitized to alphanumerics and capped at 16 characters. Message
+fields, tokens, passwords, signatures and headers are never logged.

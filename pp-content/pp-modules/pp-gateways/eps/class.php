@@ -50,6 +50,7 @@
         const CHECKOUT_SESSION_TTL     = 900;
         const SESSION_META_KEY         = 'eps_checkout';
         const MIN_SESSION_TOKEN_LENGTH = 8;
+        const MAX_BEARER_TOKEN_LENGTH   = 4096;
 
         public function info()
         {
@@ -631,6 +632,7 @@
             while ($attempts < self::TOKEN_MAX_ATTEMPTS) {
                 $attempts++;
                 $startedAt = microtime(true);
+                $lastStructure = '';
 
                 $remainingBeforeAttempt = $deadline - microtime(true);
                 $this->requestTimeoutOverride = $this->timeoutForRemaining($remainingBeforeAttempt);
@@ -656,29 +658,28 @@
 
                 if ($kind === 'none') {
                     $decoded = $this->decodeJson($response['body'] ?? '');
-                    $token = '';
+                    $extracted = $this->extractBearerToken($decoded);
 
-                    if (is_array($decoded) && isset($decoded['token']) && is_string($decoded['token'])) {
-                        $token = trim($decoded['token']);
-                    }
-
-                    if ($token !== '' && strlen($token) >= self::MIN_SESSION_TOKEN_LENGTH) {
+                    if ($extracted['value'] !== '') {
                         $this->log('EPS_AUTH_OK', [
                             'attempt'    => $attempts,
                             'elapsed_ms' => $elapsedMs,
                             'http'       => $http,
+                            'carrier'    => $extracted['carrier'],
                         ] + $timings);
 
-                        return ['ok' => true, 'token' => $token, 'attempts' => $attempts];
+                        return ['ok' => true, 'token' => $extracted['value'], 'attempts' => $attempts];
                     }
 
                     $kind = is_array($decoded) ? 'no_token' : 'invalid_json';
+                    $lastStructure = $this->describeTokenStructure($decoded);
                 }
 
                 $this->log('EPS_AUTH_ATTEMPT', [
                     'attempt'    => $attempts,
                     'of'         => self::TOKEN_MAX_ATTEMPTS,
                     'outcome'    => $kind,
+                    'structure'  => $lastStructure ?? '',
                     'elapsed_ms' => $elapsedMs,
                     'http'       => $http,
                     'errno'      => (int) ($response['errno'] ?? 0),
@@ -718,11 +719,155 @@
             ]);
 
             return $this->fail($this->authFailureCode($lastKind), [
-                'attempts' => $attempts,
-                'http'     => (int) ($lastResponse['status'] ?? 0),
+                'attempts'  => $attempts,
+                'http'      => (int) ($lastResponse['status'] ?? 0),
+                'structure' => $lastStructure ?? '',
             ]);
         }
 
+        /**
+         * Candidate token carriers in priority order.
+         *
+         * "token" is the verified historical format that produced real EPS
+         * sessions in production. The others are the shapes the provider has
+         * used or documented around its JWT authentication; every candidate
+         * must pass the same strict validation, so accepting them cannot
+         * weaken the check.
+         */
+        protected function tokenCarrierKeys()
+        {
+            return ['token', 'Token', 'accessToken', 'access_token'];
+        }
+
+        protected function extractBearerToken($decoded)
+        {
+            if (!is_array($decoded)) {
+                return ['value' => '', 'carrier' => ''];
+            }
+
+            foreach ($this->tokenCarrierKeys() as $key) {
+                if (isset($decoded[$key]) && $this->looksLikeBearerToken($decoded[$key])) {
+                    return ['value' => trim((string) $decoded[$key]), 'carrier' => $key];
+                }
+            }
+
+            if (isset($decoded['data']) && is_array($decoded['data'])) {
+                foreach ($this->tokenCarrierKeys() as $key) {
+                    if (isset($decoded['data'][$key]) && $this->looksLikeBearerToken($decoded['data'][$key])) {
+                        return ['value' => trim((string) $decoded['data'][$key]), 'carrier' => 'data.' . $key];
+                    }
+                }
+            }
+
+            return ['value' => '', 'carrier' => ''];
+        }
+
+        /**
+         * Printable ASCII, no whitespace, bounded length: a real bearer token,
+         * not HTML, a sentence or a number.
+         */
+        protected function looksLikeBearerToken($value)
+        {
+            if (!is_string($value)) {
+                return false;
+            }
+
+            $trimmed = trim($value);
+            $length = strlen($trimmed);
+
+            if ($length < self::MIN_SESSION_TOKEN_LENGTH || $length > self::MAX_BEARER_TOKEN_LENGTH) {
+                return false;
+            }
+
+            return (bool) preg_match('/^[A-Za-z0-9._~+\/=-]+$/', $trimmed);
+        }
+
+        /**
+         * Structural fingerprint of a GetToken response.
+         *
+         * Records ONLY top-level key names, value types (string length for
+         * strings), one nesting level of key names, and the value of allowlisted
+         * status/code fields (16 sanitized characters max). Message fields,
+         * tokens, credentials and all other values never reach the log.
+         */
+        protected function describeTokenStructure($decoded)
+        {
+            if (!is_array($decoded)) {
+                return 'not_json';
+            }
+
+            $allowlistedCodeKeys = [
+                'status', 'code', 'responsecode', 'response_code', 'errorcode',
+                'error_code', 'result', 'state', 'statuscode', 'status_code',
+            ];
+
+            $parts = [];
+            $codes = [];
+
+            foreach ($decoded as $key => $value) {
+                $safeKey = $this->sanitizeStructureToken((string) $key);
+                if ($safeKey === '') {
+                    continue;
+                }
+
+                if (is_array($value)) {
+                    $childParts = [];
+                    foreach (array_slice($value, 0, 8, true) as $childKey => $childValue) {
+                        $safeChild = $this->sanitizeStructureToken((string) $childKey);
+                        if ($safeChild === '') {
+                            continue;
+                        }
+                        $childParts[] = $safeChild . $this->structureType($childValue);
+                    }
+                    $parts[] = $safeKey . '{' . implode(',', $childParts) . '}';
+                    continue;
+                }
+
+                $parts[] = $safeKey . $this->structureType($value);
+
+                if (in_array(strtolower($safeKey), $allowlistedCodeKeys, true) && is_scalar($value)) {
+                    $codes[] = $safeKey . '=' . $this->sanitizeStructureToken((string) $value);
+                }
+            }
+
+            if (empty($parts)) {
+                return 'empty_object';
+            }
+
+            $out = 'keys:' . implode(',', array_slice($parts, 0, 12));
+
+            if (!empty($codes)) {
+                $out .= ';codes:' . implode(',', array_slice($codes, 0, 6));
+            }
+
+            return substr($out, 0, 320);
+        }
+
+        protected function structureType($value)
+        {
+            if (is_string($value)) {
+                return ':s' . strlen($value);
+            }
+            if (is_int($value) || is_float($value)) {
+                return ':n';
+            }
+            if (is_bool($value)) {
+                return $value ? ':true' : ':false';
+            }
+            if (is_null($value)) {
+                return ':null';
+            }
+            if (is_array($value)) {
+                return ':arr' . count($value);
+            }
+
+            return ':other';
+        }
+
+        protected function sanitizeStructureToken($value)
+        {
+            return substr(preg_replace('/[^A-Za-z0-9_]/', '', (string) $value), 0, 16);
+        }
         /**
          * Classify a token/initialisation transport+HTTP result without logging
          * the response body.
@@ -1357,7 +1502,10 @@
                 }
 
                 $safeKey = preg_replace('/[^A-Za-z0-9_]/', '', (string) $key);
-                $safeValue = substr(preg_replace('/[^A-Za-z0-9_.:@\/+-]/', '', (string) $value), 0, 120);
+
+                // Structural punctuation only: quotes, backslashes and percent signs stay banned.
+                $maxLength = ($safeKey === 'structure') ? 320 : 120;
+                $safeValue = substr(preg_replace('/[^A-Za-z0-9_.,:;@\/+\-=()\[\]{} ]/', '', (string) $value), 0, $maxLength);
 
                 if ($safeKey === '') {
                     continue;

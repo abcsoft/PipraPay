@@ -188,6 +188,11 @@ function eps_http_headers(int $status, array $headers, string $body = ''): array
     ];
 }
 
+function eps_token_body(array $body): array
+{
+    return ['ok' => true, 'errno' => 0, 'error' => '', 'status' => 200, 'body' => json_encode($body)];
+}
+
 function eps_token(): array
 {
     return eps_ok(['token' => 'stub-token-0123456789']);
@@ -645,6 +650,85 @@ $result = $gw->initiate(eps_payload_data());
 check('Provider outage uses EPS_AUTH_UNAVAILABLE', $result['code'] === 'EPS_AUTH_UNAVAILABLE', $result['code'] ?? '');
 check('Provider outage message is customer-safe', strpos($result['message'] ?? '', 'temporarily unavailable') !== false);
 
+// ---------------------------------------------------------------------------
+// 5b2. Token response carriers and structural diagnostics
+// ---------------------------------------------------------------------------
+
+echo "\n[Token response carriers]\n";
+
+$carrierUrl = 'https://pg.eps.com.bd/PG?data=AbCdEfGhIjKlMnOp1234567890';
+
+// JWT-shaped, redacted: only characters a real bearer token may contain.
+$jwtLike = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJyZWRhY3RlZCJ9.c2lnbmF0dXJl';
+
+$carriers = [
+    'legacy lowercase token'   => ['token' => $jwtLike],
+    'capitalised Token'        => ['Token' => $jwtLike],
+    'accessToken'              => ['accessToken' => $jwtLike],
+    'underscored access_token' => ['access_token' => $jwtLike],
+    'nested data.token'        => ['data' => ['token' => $jwtLike]],
+    'nested data.accessToken'  => ['data' => ['accessToken' => $jwtLike]],
+];
+
+foreach ($carriers as $label => $body) {
+    $gw = new TestEpsGateway();
+    $gw->postQueue = [eps_token_body($body), eps_init($carrierUrl)];
+    $result = $gw->initiate(eps_payload_data());
+    check("Carrier accepted: {$label}", $result['ok'] === true, ($result['code'] ?? '') . ' ' . json_encode($result['message'] ?? ''));
+}
+
+// The used carrier is logged on success; the value never is.
+$gw = new TestEpsGateway();
+$gw->postQueue = [eps_token_body(['data' => ['token' => $jwtLike]]), eps_init($carrierUrl)];
+$gw->initiate(eps_payload_data());
+$okLog = implode("\n", $gw->logs);
+check('Success logs the carrier that supplied the token', strpos($okLog, '"carrier":"data.token"') !== false, $okLog);
+check('Success log never contains the token value', strpos($okLog, $jwtLike) === false && strpos($okLog, 'eyJhbGci') === false);
+
+// Rejected shapes: same strict validation, no weakening.
+$invalid = [
+    'too short'             => ['token' => 'abc'],
+    'contains whitespace'   => ['token' => 'abc def ghi jkl mno'],
+    'contains markup'       => ['token' => '<script>alert(1)</script>'],
+    'numeric token'         => ['token' => 12345678901],
+    'token as object'       => ['token' => ['value' => $jwtLike]],
+    'empty string token'    => ['token' => ''],
+    'null token'            => ['token' => null],
+    'nested data as string' => ['data' => 'not-an-object'],
+    'nested numeric token'  => ['data' => ['token' => 987654321]],
+];
+
+foreach ($invalid as $label => $body) {
+    $gw = new TestEpsGateway();
+    $gw->postQueue = [eps_token_body($body)];
+    $result = $gw->initiate(eps_payload_data());
+    check("Carrier rejected: {$label}", $result['ok'] === false && $result['code'] === 'EPS_AUTH_NO_TOKEN', ($result['code'] ?? ''));
+}
+
+// HTTP 200 authentication-failure object: non-retryable, sanitized structure.
+$gw = new TestEpsGateway();
+$gw->postQueue = [eps_token_body(['Status' => 'Failed', 'message' => 'Invalid username or password', 'token' => null])];
+$result = $gw->initiate(eps_payload_data());
+check('Failure object stays EPS_AUTH_NO_TOKEN', $result['ok'] === false && $result['code'] === 'EPS_AUTH_NO_TOKEN');
+check('Failure object is not retried', count($gw->postCalls) === 1 && empty($gw->sleeps), (string) count($gw->postCalls));
+
+$failLog = implode("\n", $gw->logs);
+check('Structure lists key names with types', strpos($failLog, 'keys:Status:s6') !== false && strpos($failLog, 'message:s') !== false && strpos($failLog, 'token:null') !== false, $failLog);
+check('Allowlisted status value is recorded', strpos($failLog, 'codes:Status=Failed') !== false);
+check('Message field value is never logged', strpos($failLog, 'Invalid username or password') === false);
+check('Failure log contains no token-like value', strpos($failLog, 'eyJ') === false);
+
+// A non-JSON 200 stays invalid_json.
+$gw = new TestEpsGateway();
+$gw->postQueue = [eps_http(200, '<html>login</html>')];
+$result = $gw->initiate(eps_payload_data());
+check('Non-JSON 200 reports invalid JSON', $result['ok'] === false && $result['code'] === 'EPS_AUTH_INVALID_JSON', $result['code'] ?? '');
+
+// no_token never consumes the retry budget.
+$gw = new TestEpsGateway();
+$gw->postQueue = [eps_token_body(['Status' => 'Failed']), eps_token_body(['Status' => 'Failed'])];
+$gw->initiate(eps_payload_data());
+check('no_token never consumes the second attempt', count($gw->postCalls) === 1, (string) count($gw->postCalls));
 // ---------------------------------------------------------------------------
 // 5c. Initialisation safety
 // ---------------------------------------------------------------------------
