@@ -1045,6 +1045,47 @@
             return $this->buildUrl($base, $params);
         }
 
+        /**
+         * Scoped presentation for the error screens.
+         *
+         * Deliberately independent of the framework: Tabler's `.alert` is a
+         * horizontal flex container, which collapsed the previous markup into
+         * overlapping controls. Everything here is a vertical stack.
+         */
+        protected function errorStyles()
+        {
+            return '<style>'
+                . '.loading-123412341234{display:none!important;}'
+                . '.eps-error{display:flex;flex-direction:column;align-items:stretch;gap:14px;'
+                . 'box-sizing:border-box;width:100%;max-width:100%;margin:18px 0;padding:18px 16px;'
+                . 'border:1px solid #f1b0b7;border-radius:12px;background:#fff5f5;color:#7a1f1f;'
+                . 'font-size:15px;line-height:1.5;text-align:left;overflow-wrap:anywhere;}'
+                . '.eps-error *{box-sizing:border-box;}'
+                . '.eps-error__title{margin:0;padding:0;font-size:18px;line-height:1.3;font-weight:700;color:#8a1f1f;}'
+                . '.eps-error__message{margin:0;padding:0;font-size:15px;line-height:1.5;color:#5f2020;}'
+                . '.eps-error__ref{margin:0;padding:0;font-size:12px;line-height:1.4;color:#7a1f1f;opacity:.8;}'
+                . '.eps-error__ref code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;'
+                . 'font-size:12px;word-break:break-all;}'
+                . '.eps-error__actions{display:flex;flex-direction:column;align-items:stretch;gap:10px;'
+                . 'width:100%;margin:2px 0 0 0;padding:0;}'
+                . '.eps-error__btn{display:block;width:100%;max-width:100%;min-height:46px;'
+                . 'padding:12px 16px;border:1px solid transparent;border-radius:10px;'
+                . 'font-size:15px;font-weight:600;line-height:1.25;text-align:center;'
+                . 'text-decoration:none;white-space:normal;word-break:break-word;cursor:pointer;}'
+                . '.eps-error__btn:focus-visible{outline:3px solid rgba(238,45,66,.45);outline-offset:2px;}'
+                . '.eps-error__btn--primary{background:#ee2d42;color:#ffffff;}'
+                . '.eps-error__btn--primary:hover{background:#d0263a;color:#ffffff;}'
+                . '.eps-error__btn--secondary{background:#ffffff;color:#7a1f1f;border-color:#d9a3a9;}'
+                . '.eps-error__btn--secondary:hover{background:#fff0f1;color:#7a1f1f;}'
+                . '@media (max-width:480px){'
+                . '.eps-error{padding:16px 14px;gap:12px;font-size:14px;}'
+                . '.eps-error__title{font-size:16px;}'
+                . '.eps-error__message{font-size:14px;}'
+                . '.eps-error__btn{padding:12px;font-size:14px;}'
+                . '}'
+                . '</style>';
+        }
+
         protected function renderFailure(array $data, array $result)
         {
             $code = preg_replace('/[^A-Za-z0-9_]/', '', (string) ($result['code'] ?? 'EPS_UNKNOWN'));
@@ -1066,22 +1107,25 @@
                 ['gateway' => $gatewayId, 'category' => 'cards', 'retry' => '1']
             );
 
-            $html = '<style>.loading-123412341234{display:none;}</style>';
-            $html .= '<div class="alert alert-danger" role="alert" style="text-align:left;">';
-            $html .= '<h4 class="alert-heading" style="margin-bottom:8px;">Payment could not be started</h4>';
-            $html .= '<p style="margin:0 0 8px 0;">' . $this->escape($message) . '</p>';
+            $html = $this->errorStyles();
+            $html .= '<div class="eps-error eps-error--start" role="alert" aria-live="assertive">';
+            $html .= '<h2 class="eps-error__title">Payment could not be started</h2>';
+            $html .= '<p class="eps-error__message">' . $this->escape($message) . '</p>';
 
             if ($reference !== '') {
-                $html .= '<p style="margin:0;font-size:12px;opacity:.75;">Reference: <span style="font-family:monospace;">'
-                    . $this->escape($reference) . '</span></p>';
+                $html .= '<p class="eps-error__ref">Reference: <code>' . $this->escape($reference) . '</code></p>';
             }
+
+            $html .= '<div class="eps-error__actions">';
 
             if (!empty($result['retryable']) && $gatewayId !== '') {
-                $html .= '<a class="btn btn-primary w-100 mt-3" href="' . $this->escape($retryUrl) . '">Try again</a>';
+                $html .= '<a class="eps-error__btn eps-error__btn--primary" href="' . $this->escape($retryUrl) . '"'
+                    . ' role="button">Try again</a>';
             }
 
-            $html .= '<a class="btn btn-outline-secondary w-100 mt-2" href="' . $this->escape($backUrl)
-                . '">Choose another payment method</a>';
+            $html .= '<a class="eps-error__btn eps-error__btn--secondary" href="' . $this->escape($backUrl) . '"'
+                . ' role="button">Choose another payment method</a>';
+            $html .= '</div>';
             $html .= '</div>';
 
             echo $html;
@@ -1097,18 +1141,19 @@
                 ['manual' => '1']
             );
 
-            $html = '<style>.loading-123412341234{display:none;}</style>';
-            $html .= '<div class="alert alert-danger" role="alert" style="text-align:left;">';
-            $html .= '<h4 class="alert-heading" style="margin-bottom:8px;">Payment not verified</h4>';
-            $html .= '<p style="margin:0 0 8px 0;">' . $this->escape($message) . '</p>';
+            $html = $this->errorStyles();
+            $html .= '<div class="eps-error eps-error--verify" role="alert" aria-live="assertive">';
+            $html .= '<h2 class="eps-error__title">Payment not verified</h2>';
+            $html .= '<p class="eps-error__message">' . $this->escape($message) . '</p>';
 
             if ($reference !== '') {
-                $html .= '<p style="margin:0;font-size:12px;opacity:.75;">Reference: <span style="font-family:monospace;">'
-                    . $this->escape($reference) . '</span></p>';
+                $html .= '<p class="eps-error__ref">Reference: <code>' . $this->escape($reference) . '</code></p>';
             }
 
-            $html .= '<a class="btn btn-outline-secondary w-100 mt-3" href="' . $this->escape($backUrl)
-                . '">Back to payment page</a>';
+            $html .= '<div class="eps-error__actions">';
+            $html .= '<a class="eps-error__btn eps-error__btn--secondary" href="' . $this->escape($backUrl) . '"'
+                . ' role="button">Back to payment page</a>';
+            $html .= '</div>';
             $html .= '</div>';
 
             echo $html;

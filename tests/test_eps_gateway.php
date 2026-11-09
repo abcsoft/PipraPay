@@ -682,6 +682,47 @@ check('Failure page never leaks the internal code to the customer', strpos($html
 check('Failure page offers no automatic retry loop', strpos($html, 'http-equiv="refresh"') === false);
 
 // ---------------------------------------------------------------------------
+// 7b. Failure screen layout
+// ---------------------------------------------------------------------------
+
+echo "\n[Failure screen layout]\n";
+
+$layoutGw = new TestEpsGateway();
+$layoutGw->postQueue = [eps_token(), eps_http(500, 'provider error')];
+ob_start();
+$layoutGw->process_payment(eps_payload_data());
+$failureHtml = (string) ob_get_clean();
+
+check('Failure screen uses the scoped component', strpos($failureHtml, 'class="eps-error') !== false && strpos($failureHtml, 'role="alert"') !== false);
+check('Failure screen no longer uses the framework alert', strpos($failureHtml, 'alert alert-danger') === false);
+check('Failure screen no longer uses framework button utilities', strpos($failureHtml, 'btn btn-primary') === false);
+
+$actionsPos = strpos($failureHtml, 'eps-error__actions');
+$retryPos = strpos($failureHtml, 'Try again');
+$fallbackPos = strpos($failureHtml, 'Choose another payment method');
+check(
+    'Both controls live inside the actions container, in order',
+    $actionsPos !== false && $retryPos !== false && $fallbackPos !== false
+        && $retryPos > $actionsPos && $fallbackPos > $retryPos
+);
+check('Controls are block-level full-width buttons', substr_count($failureHtml, 'eps-error__btn') >= 4);
+
+$stylePos = strpos($failureHtml, '.eps-error{display:flex;flex-direction:column');
+check('Error layout is a vertical flex stack', $stylePos !== false);
+check('Buttons are styled as block elements', strpos($failureHtml, '.eps-error__btn{display:block;width:100%') !== false);
+check('A mobile breakpoint is declared', strpos($failureHtml, '@media (max-width:480px)') !== false);
+
+$escapeGw = new TestEpsGateway();
+$escapeGw->postQueue = [eps_token(), eps_http(500)];
+$escapeData = eps_payload_data(['transaction' => ['ref' => 'TXN<X>"&\'END']]);
+ob_start();
+$escapeGw->process_payment($escapeData);
+$escapeHtml = (string) ob_get_clean();
+check(
+    'Transaction reference is HTML-escaped in the error screen',
+    strpos($escapeHtml, 'TXN<X>') === false && strpos($escapeHtml, 'TXN&lt;X&gt;') !== false
+);
+// ---------------------------------------------------------------------------
 // 8. Gateway contract (legacy compatibility)
 // ---------------------------------------------------------------------------
 
