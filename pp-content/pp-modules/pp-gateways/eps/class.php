@@ -263,6 +263,7 @@
                     'ref'  => $reference,
                     'http' => $response['status'] ?? 0,
                     'info' => $validation['detail'] ?? '',
+                    'shape' => $this->describeUrlShape($decoded['RedirectURL'] ?? null),
                 ]);
             }
 
@@ -273,7 +274,13 @@
                 'mode'                    => $settings['mode'],
             ]);
 
-            $this->log('EPS_SESSION_CREATED', ['ref' => $reference, 'mode' => $settings['mode']]);
+            $this->log('EPS_SESSION_CREATED', [
+                'ref'        => $reference,
+                'mode'       => $settings['mode'],
+                'host'       => $validation['host'] ?? '',
+                'data_state' => $validation['data_state'] ?? '',
+                'data_len'   => $validation['data_len'] ?? 0,
+            ]);
 
             return [
                 'ok'                      => true,
@@ -792,7 +799,13 @@
                     return ['ok' => false, 'code' => 'EPS_INIT_NULL_SESSION', 'detail' => 'no_session_parameter'];
                 }
 
-                return ['ok' => true, 'url' => $url];
+                return [
+                    'ok'         => true,
+                    'url'        => $url,
+                    'host'       => strtolower((string) $parts['host']),
+                    'data_len'   => 0,
+                    'data_state' => 'path_token',
+                ];
             }
 
             $decodedToken = urldecode($token);
@@ -813,7 +826,13 @@
                 return ['ok' => false, 'code' => 'EPS_INIT_MALFORMED_SESSION', 'detail' => 'session_charset'];
             }
 
-            return ['ok' => true, 'url' => $url];
+            return [
+                'ok'         => true,
+                'url'        => $url,
+                'host'       => strtolower((string) $parts['host']),
+                'data_len'   => strlen($decodedToken),
+                'data_state' => 'query_token',
+            ];
         }
 
         /**
@@ -840,6 +859,49 @@
             }
 
             return $value;
+        }
+        /**
+         * Describe a hostile/invalid provider URL for diagnostics without
+         * logging the URL or any token: only scheme, host and session length.
+         */
+        protected function describeUrlShape($url)
+        {
+            if (!is_string($url)) {
+                return 'not_a_string';
+            }
+
+            $url = trim($url);
+
+            if ($url === '') {
+                return 'empty';
+            }
+
+            $parts = parse_url($url);
+            if (!is_array($parts)) {
+                return 'unparsable';
+            }
+
+            $host = strtolower((string) ($parts['host'] ?? ''));
+            $query = (string) ($parts['query'] ?? '');
+            $sessionLen = 0;
+            $sessionState = 'absent';
+
+            if ($query !== '' && preg_match('/(?:^|&)data=([^&]*)/', $query, $m)) {
+                $decoded = urldecode($m[1]);
+                $sessionLen = strlen($decoded);
+                $sessionState = in_array(strtolower($decoded), ['null', 'undefined', 'none', 'nil', 'false', '0', ''], true)
+                    ? 'null_like'
+                    : 'present';
+            }
+
+            return substr(
+                'scheme=' . strtolower((string) ($parts['scheme'] ?? 'none'))
+                . ',host=' . ($host !== '' ? $host : 'none')
+                . ',data=' . $sessionState
+                . ',len=' . $sessionLen,
+                0,
+                160
+            );
         }
         protected function isTrustedEpsHost($host)
         {

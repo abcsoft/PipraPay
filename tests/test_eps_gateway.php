@@ -447,6 +447,14 @@ $gw = new TestEpsGateway();
 $gw->postQueue = [eps_token(), eps_init('https://pg.eps.com.bd/PG?data=null')];
 $result = $gw->initiate(eps_payload_data());
 check('data=null never reaches the customer', $result['ok'] === false && $result['code'] === 'EPS_INIT_NULL_SESSION', $result['code'] ?? '');
+$nullLog = implode("\n", $gw->logs);
+check(
+    'Rejected URL is described by shape only',
+    strpos($nullLog, 'null_like') !== false
+        && strpos($nullLog, 'host=pg.eps.com.bd') !== false
+        && strpos($nullLog, 'https://') === false,
+    $nullLog
+);
 
 // Empty RedirectURL end to end
 $gw = new TestEpsGateway();
@@ -494,6 +502,15 @@ check('Authorization header uses the bearer token', in_array('Authorization: Bea
 check('x-hash header is present on the initialisation call', (bool) preg_grep('/^x-hash: ./', $gw->postCalls[1]['headers'] ?? []));
 check('Sandbox mode uses the sandbox API host', strpos($gw->postCalls[0]['url'], 'https://sandboxpgapi.eps.com.bd/v1/Auth/GetToken') === 0, $gw->postCalls[0]['url']);
 check('Sandbox mode uses the sandbox initialisation endpoint', strpos($gw->postCalls[1]['url'], 'https://sandboxpgapi.eps.com.bd/v1/EPSEngine/InitializeEPS') === 0, $gw->postCalls[1]['url']);
+$initLog = implode("\n", $gw->logs);
+check(
+    'URL shape is logged on success without the token',
+    strpos($initLog, 'EPS_SESSION_CREATED') !== false
+        && strpos($initLog, 'query_token') !== false
+        && strpos($initLog, 'data_len') !== false
+        && strpos($initLog, 'AbCdEfGh') === false,
+    $initLog
+);
 
 // Refresh / back-button: the stored session is re-used, no new provider call.
 $postCallsBefore = count($gw->postCalls);

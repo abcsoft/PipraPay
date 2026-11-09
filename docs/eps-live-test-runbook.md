@@ -152,3 +152,100 @@ transaction metadata, and verify the real gateway row is still `active`.
 - Whether EPS validates `successUrl` against a whitelisted domain.
 - Provider session lifetime (local reuse window is 900 s).
 - Source of the hosted-page 504 observed previously.
+
+---
+
+## 8. Incident triage — browser lands on `?data=null` in production
+
+Reported symptom: hosted page opens at `https://pg.eps.com.bd/PG?data=null`,
+"Invalid Request! Transaction Error", empty merchant id, payment methods not
+loading, slow first paint.
+
+Facts that constrain the diagnosis:
+
+- `1e52b66` refuses to redirect unless the provider URL is HTTPS, on
+  `eps.com.bd`, and carries a session token that is not `null` / `undefined` /
+  empty / short / illegal. A `data=null` URL can therefore only reach the browser
+  if (a) the deployed file is not `1e52b66`, or (b) the URL was valid at handoff
+  and the provider rewrote it afterwards.
+- `GET https://pg.eps.com.bd/PG?data=null` answers **200 in ~0.34 s** from this
+  network, body contains `Invalid Request` / `Transaction Error`. It is a
+  terminal EPS error page — no upstream 504 and no redirect chain.
+- Nothing else on the gateway page navigates: the emitted
+  `location.href=<provider URL>` is the only navigation for `gateway_type=api`.
+  The AJAX `data.redirect` handler belongs to manual-verification gateways only.
+
+### 8.1 Is the deployed file really `1e52b66`?
+
+```bash
+cd /home/pay.abcsoft.bd/public_html
+git rev-parse HEAD
+# must print: 1e52b66... (or a later reviewed commit)
+
+git hash-object pp-content/pp-modules/pp-gateways/eps/class.php
+# must print: c94729a9fb3930b45f2c8f3025a253bebcedb8fe   (1e52b66)
+
+grep -c "EPS_INIT_NULL_SESSION" pp-content/pp-modules/pp-gateways/eps/class.php
+# must be >= 1; 0 means the old gateway file is still in place
+```
+
+### 8.2 Is OPcache serving stale bytecode?
+
+```bash
+/usr/local/lsws/lsphp83/bin/php -i | grep -E "opcache.(enable|validate_timestamps|revalidate_freq)"
+```
+
+`opcache.validate_timestamps=0` (or a large `revalidate_freq`) keeps the old
+class in memory across a deploy. Restart LSWS/PHP after deploying:
+
+```bash
+sudo systemctl restart lsws
+```
+
+### 8.3 What do the logs say?
+
+```bash
+grep "\[EPS\]" <error_log> | tail -20
+```
+
+| Build | Expected line on success | Expected line on rejection |
+|---|---|---|
+| `1e52b66` | `EPS_SESSION_CREATED \| ref=… mode=live` | `EPS_INIT_NULL_SESSION \| ref=… http=200 info=null_session` |
+| next build (shape logging) | `… data_state=query_token data_len=NNN` | `… shape=scheme=https,host=pg.eps.com.bd,data=null_like,len=4` |
+
+**No `[EPS]` line at the timestamp of the failed attempt means the old gateway
+code executed** — every code path in the reviewed build logs exactly one line.
+
+A repeated `EPS_SESSION_REUSED` on failing attempts means the cached hosted
+session is being replayed; append `?retry=1` to the gateway URL to force a fresh
+session before drawing conclusions about the provider.
+
+### 8.4 Browser capture
+
+DevTools → Network → enable **Preserve log** → reproduce → right-click → *Save
+all as HAR*. Then, locally:
+
+```bash
+php tests/tools/analyze_eps_har.php capture.har
+```
+
+Verdicts:
+
+| Verdict | Meaning |
+|---|---|
+| `PIPRAPAY` | the payment page document itself emitted the `data=null` URL → stale code (8.1/8.2) |
+| `EPS` (redirect) | EPS answered a non-null URL with `Location: …data=null` → provider invalidated the session |
+| `EPS` (script) | provider JavaScript/XHR navigated to `data=null` |
+| `NO_NULL` | capture does not contain the symptom |
+
+The analyzer prints only redacted URLs (`data=<redacted:NN>`), statuses, timings
+and the initiating request. Keep the HAR itself local; it contains session
+identifiers.
+
+### 8.5 If the verdict is EPS
+
+Then the handoff URL was valid and the provider rejected the session. Compare in
+this order: `mode` (`live` vs `sandbox`), `merchantId`/`storeId` against the EPS
+merchant portal, the `x-hash` message, and whether `successUrl` is reachable and
+whitelisted. Escalate with §7 of `docs/eps-integration.md` (sanitized evidence
+only).
