@@ -312,7 +312,7 @@
         {
             $value = strtolower(preg_replace('/[^A-Za-z0-9_]/', '', (string) $code));
 
-            $public = ['configuration', 'amount', 'customer', 'unreachable', 'authentication', 'provider_response', 'rejected', 'session', 'verification', 'unknown'];
+            $public = ['configuration', 'amount', 'customer', 'unreachable', 'authentication', 'provider_response', 'rejected', 'session', 'verification', 'unavailable', 'uncertain', 'in_progress', 'unknown'];
 
             if (in_array($value, $public, true)) {
                 return $value;
@@ -325,6 +325,7 @@
                 'EPS_AUTH_TRANSPORT'           => 'unreachable',
                 'EPS_INIT_TRANSPORT'           => 'unreachable',
                 'EPS_AUTH_HTTP'                => 'authentication',
+                'EPS_AUTH_UNAVAILABLE'         => 'unavailable',
                 'EPS_AUTH_NO_TOKEN'            => 'authentication',
                 'EPS_AUTH_INVALID_JSON'        => 'provider_response',
                 'EPS_INIT_HTTP'                => 'provider_response',
@@ -335,6 +336,8 @@
                 'EPS_INIT_UNTRUSTED_HOST'      => 'session',
                 'EPS_INIT_NULL_SESSION'        => 'session',
                 'EPS_INIT_MALFORMED_SESSION'   => 'session',
+                'EPS_INIT_UNCERTAIN'          => 'uncertain',
+                'EPS_INIT_IN_PROGRESS'        => 'in_progress',
                 'EPS_CALLBACK_INVALID'         => 'verification',
                 'EPS_CALLBACK_MISMATCH'        => 'verification',
                 'EPS_CALLBACK_VERIFY_FAILED'   => 'verification',
@@ -368,6 +371,9 @@
                 'rejected'          => 'The payment provider rejected this payment request. Please choose another payment method.',
                 'session'           => 'The payment provider did not create a valid payment session. Please try again or choose another payment method.',
                 'verification'      => 'The payment could not be verified. Please contact the merchant if money was deducted.',
+                'unavailable'       => 'The payment provider is temporarily unavailable. Please try again in a moment or choose another payment method.',
+                'uncertain'         => 'We could not confirm whether the payment session was created. Please try again, or choose another payment method. If money was deducted, contact the merchant.',
+                'in_progress'       => 'A payment for this order is already being prepared. Please wait a few seconds and try again.',
                 'unknown'           => 'The EPS payment session could not be started. Please try again or choose another payment method.',
             ];
 

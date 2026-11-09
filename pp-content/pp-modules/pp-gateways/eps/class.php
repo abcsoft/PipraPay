@@ -33,8 +33,19 @@
         const LIVE_BASE_URL    = 'https://pgapi.eps.com.bd';
         const SANDBOX_BASE_URL = 'https://sandboxpgapi.eps.com.bd';
 
-        const CONNECT_TIMEOUT = 10;
-        const REQUEST_TIMEOUT = 45;
+        const CONNECT_TIMEOUT = 15;
+        const REQUEST_TIMEOUT = 30;
+
+        // GetToken retry policy: at most two attempts inside a wall-clock budget.
+        const TOKEN_MAX_ATTEMPTS        = 2;
+        const TOKEN_TOTAL_BUDGET        = 35;
+        const TOKEN_BACKOFF_MS          = 400;
+        const TOKEN_BACKOFF_JITTER_MS   = 300;
+        const TOKEN_RETRY_MIN_REMAINING = 5;
+
+        // A single initialisation may not be retried while this claim is fresh.
+        const INIT_IN_PROGRESS_TTL = 90;
+        const LOCK_META_KEY        = 'eps_init_lock';
 
         const CHECKOUT_SESSION_TTL     = 900;
         const SESSION_META_KEY         = 'eps_checkout';
@@ -112,6 +123,7 @@
         public function process_payment($data = [])
         {
             echo '<center><div class="spinner-border text-primary m-3 loading-123412341234" role="status"><span class="visually-hidden">Loading...</span></div></center>';
+            $this->flushOutput();
 
             $result = $this->initiate($data);
 
@@ -170,9 +182,11 @@
 
             $isRetry = $this->isRetryRequest();
             $stored = $this->loadSession($reference);
+            $storedState = is_array($stored) ? (string) ($stored['state'] ?? 'ready') : 'ready';
 
-            if (!$isRetry && $this->isStoredSessionReusable($stored)) {
+            if (!$isRetry && $storedState === 'ready' && $this->isStoredSessionReusable($stored)) {
                 $reuse = $this->validateRedirectUrl($stored['redirect_url']);
+
                 if (!empty($reuse['ok'])) {
                     $this->log('EPS_SESSION_REUSED', ['ref' => $reference]);
 
@@ -190,106 +204,169 @@
                 return $this->fail('EPS_CUSTOMER_INVALID', ['ref' => $reference, 'detail' => $customer['detail'] ?? '']);
             }
 
-            $tokenResult = $this->requestToken($settings);
-            if (empty($tokenResult['ok'])) {
-                return $tokenResult;
+            // Only one initialisation may run per transaction. A second request
+            // (double click, reload, several tabs) must not create a second
+            // payable provider session.
+            if (!$this->acquireInitLock($reference)) {
+                return $this->fail('EPS_INIT_IN_PROGRESS', ['ref' => $reference]);
             }
 
-            $merchantTransactionId = $this->generateMerchantTransactionId($reference);
+            try {
+                $tokenResult = $this->requestToken($settings, $reference);
+                if (empty($tokenResult['ok'])) {
+                    return $tokenResult;
+                }
 
-            $payload = [
-                'merchantId'             => $settings['merchant_id'],
-                'storeId'                => $settings['store_id'],
-                'CustomerOrderId'        => (string) $merchantTransactionId,
-                'merchantTransactionId'  => $merchantTransactionId,
-                'transactionTypeId'      => 1, // Web
-                'totalAmount'            => $amount,
-                'successUrl'             => pp_callback_url(),
-                'failUrl'                => $this->checkoutReturnUrl($reference),
-                'cancelUrl'              => $this->checkoutReturnUrl($reference),
-                'customerName'           => $customer['name'],
-                'customerEmail'          => $customer['email'],
-                'customerAddress'        => 'N/A',
-                'customerCity'           => 'N/A',
-                'customerState'          => 'N/A',
-                'customerPostcode'       => '0000',
-                'customerCountry'        => 'BD',
-                'customerPhone'          => $customer['phone'],
-                'productName'            => 'Digital Products',
-                'ValueA'                 => (string) $reference,
-            ];
+                $merchantTransactionId = $this->generateMerchantTransactionId($reference);
 
-            $headers = [
-                'Authorization: Bearer ' . $tokenResult['token'],
-                'x-hash: ' . $this->sign($merchantTransactionId, $settings['hashkey']),
-            ];
+                $payload = [
+                    'merchantId'             => $settings['merchant_id'],
+                    'storeId'                => $settings['store_id'],
+                    'CustomerOrderId'        => (string) $merchantTransactionId,
+                    'merchantTransactionId'  => $merchantTransactionId,
+                    'transactionTypeId'      => 1, // Web
+                    'totalAmount'            => $amount,
+                    'successUrl'             => pp_callback_url(),
+                    'failUrl'                => $this->checkoutReturnUrl($reference),
+                    'cancelUrl'              => $this->checkoutReturnUrl($reference),
+                    'customerName'           => $customer['name'],
+                    'customerEmail'          => $customer['email'],
+                    'customerAddress'        => 'N/A',
+                    'customerCity'           => 'N/A',
+                    'customerState'          => 'N/A',
+                    'customerPostcode'       => '0000',
+                    'customerCountry'        => 'BD',
+                    'customerPhone'          => $customer['phone'],
+                    'productName'            => 'Digital Products',
+                    'ValueA'                 => (string) $reference,
+                ];
 
-            $response = $this->httpPostJson($settings['base_url'] . '/v1/EPSEngine/InitializeEPS', $headers, $payload);
+                $headers = [
+                    'Authorization: Bearer ' . $tokenResult['token'],
+                    'x-hash: ' . $this->sign($merchantTransactionId, $settings['hashkey']),
+                ];
 
-            if (empty($response['ok'])) {
-                return $this->fail('EPS_INIT_TRANSPORT', [
-                    'ref'   => $reference,
-                    'errno' => $response['errno'] ?? '',
+                // Record the intent before the non-idempotent call: if it times
+                // out we know this merchant transaction id may exist provider
+                // side, so we report uncertainty instead of silently retrying.
+                $this->storeSessionState($reference, 'pending', [
+                    'merchant_transaction_id' => $merchantTransactionId,
                 ]);
-            }
 
-            if (!$this->isSuccessStatus($response['status'] ?? 0)) {
-                return $this->fail('EPS_INIT_HTTP', [
-                    'ref'  => $reference,
-                    'http' => $response['status'] ?? 0,
+                $response = $this->httpPostJson($settings['base_url'] . '/v1/EPSEngine/InitializeEPS', $headers, $payload);
+
+                if (empty($response['ok'])) {
+                    $errno = (int) ($response['errno'] ?? 0);
+
+                    if ($errno === 28) {
+                        // Timeout: the provider may have created the session.
+                        $this->storeSessionState($reference, 'uncertain', [
+                            'merchant_transaction_id' => $merchantTransactionId,
+                            'last_code'               => 'EPS_INIT_UNCERTAIN',
+                        ]);
+
+                        return $this->fail('EPS_INIT_UNCERTAIN', [
+                            'ref'      => $reference,
+                            'errno'    => $errno,
+                            'attempts' => 1,
+                        ]);
+                    }
+
+                    $this->storeSessionState($reference, 'failed', ['last_code' => 'EPS_INIT_TRANSPORT']);
+
+                    return $this->fail('EPS_INIT_TRANSPORT', [
+                        'ref'   => $reference,
+                        'errno' => $errno,
+                    ]);
+                }
+
+                $status = (int) ($response['status'] ?? 0);
+
+                if (!$this->isSuccessStatus($status)) {
+                    if ($status >= 500) {
+                        // Provider error after the request reached them: the
+                        // session may exist. Do not retry automatically.
+                        $this->storeSessionState($reference, 'uncertain', [
+                            'merchant_transaction_id' => $merchantTransactionId,
+                            'last_code'               => 'EPS_INIT_HTTP',
+                        ]);
+
+                        return $this->fail('EPS_INIT_UNCERTAIN', [
+                            'ref'  => $reference,
+                            'http' => $status,
+                        ]);
+                    }
+
+                    $this->storeSessionState($reference, 'failed', ['last_code' => 'EPS_INIT_HTTP']);
+
+                    return $this->fail('EPS_INIT_HTTP', [
+                        'ref'  => $reference,
+                        'http' => $status,
+                    ]);
+                }
+
+                $decoded = $this->decodeJson($response['body'] ?? '');
+
+                if ($decoded === null) {
+                    $this->storeSessionState($reference, 'uncertain', [
+                        'merchant_transaction_id' => $merchantTransactionId,
+                        'last_code'               => 'EPS_INIT_INVALID_JSON',
+                    ]);
+
+                    return $this->fail('EPS_INIT_INVALID_JSON', [
+                        'ref'  => $reference,
+                        'http' => $status,
+                    ]);
+                }
+
+                $providerFailure = $this->detectProviderFailure($decoded);
+
+                if ($providerFailure !== '') {
+                    $this->storeSessionState($reference, 'failed', ['last_code' => 'EPS_INIT_REJECTED']);
+
+                    return $this->fail('EPS_INIT_REJECTED', [
+                        'ref'      => $reference,
+                        'http'     => $status,
+                        'provider' => $providerFailure,
+                    ]);
+                }
+
+                $validation = $this->validateRedirectUrl($decoded['RedirectURL'] ?? null);
+
+                if (empty($validation['ok'])) {
+                    $this->storeSessionState($reference, 'failed', ['last_code' => $validation['code']]);
+
+                    return $this->fail($validation['code'], [
+                        'ref'   => $reference,
+                        'http'  => $status,
+                        'info'  => $validation['detail'] ?? '',
+                        'shape' => $this->describeUrlShape($decoded['RedirectURL'] ?? null),
+                    ]);
+                }
+
+                $this->storeSessionState($reference, 'ready', [
+                    'redirect_url'            => $validation['url'],
+                    'merchant_transaction_id' => $merchantTransactionId,
                 ]);
-            }
 
-            $decoded = $this->decodeJson($response['body'] ?? '');
-            if ($decoded === null) {
-                return $this->fail('EPS_INIT_INVALID_JSON', [
-                    'ref'  => $reference,
-                    'http' => $response['status'] ?? 0,
+                $this->log('EPS_SESSION_CREATED', [
+                    'ref'        => $reference,
+                    'mode'       => $settings['mode'],
+                    'host'       => $validation['host'] ?? '',
+                    'data_state' => $validation['data_state'] ?? '',
+                    'data_len'   => $validation['data_len'] ?? 0,
                 ]);
+
+                return [
+                    'ok'                      => true,
+                    'redirect_url'            => $validation['url'],
+                    'merchant_transaction_id' => $merchantTransactionId,
+                    'reused'                  => false,
+                ];
+            } finally {
+                $this->releaseInitLock($reference);
             }
-
-            $providerFailure = $this->detectProviderFailure($decoded);
-            if ($providerFailure !== '') {
-                return $this->fail('EPS_INIT_REJECTED', [
-                    'ref'      => $reference,
-                    'http'     => $response['status'] ?? 0,
-                    'provider' => $providerFailure,
-                ]);
-            }
-
-            $validation = $this->validateRedirectUrl($decoded['RedirectURL'] ?? null);
-            if (empty($validation['ok'])) {
-                return $this->fail($validation['code'], [
-                    'ref'  => $reference,
-                    'http' => $response['status'] ?? 0,
-                    'info' => $validation['detail'] ?? '',
-                    'shape' => $this->describeUrlShape($decoded['RedirectURL'] ?? null),
-                ]);
-            }
-
-            $this->saveSession($reference, [
-                'redirect_url'            => $validation['url'],
-                'merchant_transaction_id' => $merchantTransactionId,
-                'created_at'              => time(),
-                'mode'                    => $settings['mode'],
-            ]);
-
-            $this->log('EPS_SESSION_CREATED', [
-                'ref'        => $reference,
-                'mode'       => $settings['mode'],
-                'host'       => $validation['host'] ?? '',
-                'data_state' => $validation['data_state'] ?? '',
-                'data_len'   => $validation['data_len'] ?? 0,
-            ]);
-
-            return [
-                'ok'                      => true,
-                'redirect_url'            => $validation['url'],
-                'merchant_transaction_id' => $merchantTransactionId,
-                'reused'                  => false,
-            ];
         }
-
         // -----------------------------------------------------------------
         // Provider callback verification
         // -----------------------------------------------------------------
@@ -461,6 +538,16 @@
             return $this->executeRequest('GET', $url, $headers, null);
         }
 
+        /**
+         * Per-call total timeout override, used to keep the whole retry loop
+         * inside TOKEN_TOTAL_BUDGET.
+         */
+        protected $requestTimeoutOverride = null;
+
+        protected function timeoutForRemaining($remainingSeconds)
+        {
+            return max(5, min(self::REQUEST_TIMEOUT, (int) floor((float) $remainingSeconds)));
+        }
         protected function executeRequest($method, $url, array $headers, $body)
         {
             $ch = curl_init($url);
@@ -468,16 +555,25 @@
                 return ['ok' => false, 'errno' => -1, 'error' => 'curl_init_failed', 'status' => 0, 'body' => ''];
             }
 
+            $responseHeaders = [];
+
             $options = [
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT,
-                CURLOPT_TIMEOUT        => self::REQUEST_TIMEOUT,
+                CURLOPT_TIMEOUT        => $this->requestTimeoutOverride ?? self::REQUEST_TIMEOUT,
                 CURLOPT_SSL_VERIFYPEER => true,
                 CURLOPT_SSL_VERIFYHOST => 2,
                 CURLOPT_FOLLOWLOCATION => false,
                 CURLOPT_PROTOCOLS      => CURLPROTO_HTTPS,
                 CURLOPT_HTTPHEADER     => array_merge(['Content-Type: application/json', 'Accept: application/json'], $headers),
                 CURLOPT_USERAGENT      => 'PipraPay-EPS/2.0',
+                CURLOPT_HEADERFUNCTION => function ($handle, $line) use (&$responseHeaders) {
+                    if (preg_match('/^([^:]+):\s*(.*)$/', trim($line), $matches)) {
+                        $responseHeaders[strtolower(trim($matches[1]))] = trim($matches[2]);
+                    }
+
+                    return strlen($line);
+                },
             ];
 
             if (strtoupper($method) === 'POST') {
@@ -493,14 +589,24 @@
             $errno = curl_errno($ch);
             $error = curl_error($ch);
             $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+            $timings = [
+                'lookup_ms'  => (int) round(((float) curl_getinfo($ch, CURLINFO_NAMELOOKUP_TIME)) * 1000),
+                'connect_ms' => (int) round(((float) curl_getinfo($ch, CURLINFO_CONNECT_TIME)) * 1000),
+                'tls_ms'     => (int) round(((float) curl_getinfo($ch, CURLINFO_APPCONNECT_TIME)) * 1000),
+                'total_ms'   => (int) round(((float) curl_getinfo($ch, CURLINFO_TOTAL_TIME)) * 1000),
+            ];
+
             curl_close($ch);
 
             return [
-                'ok'     => $errno === 0 && is_string($raw),
-                'errno'  => $errno,
-                'error'  => substr((string) $error, 0, 200),
-                'status' => $status,
-                'body'   => is_string($raw) ? $raw : '',
+                'ok'      => $errno === 0 && is_string($raw),
+                'errno'   => $errno,
+                'error'   => substr((string) $error, 0, 200),
+                'status'  => $status,
+                'body'    => is_string($raw) ? $raw : '',
+                'headers' => $responseHeaders,
+                'timings' => $timings,
             ];
         }
 
@@ -508,43 +614,234 @@
         // Provider helpers
         // -----------------------------------------------------------------
 
-        protected function requestToken(array $settings)
+        /**
+         * Obtain a bearer token with a bounded, jittered retry.
+         *
+         * Only transient failures are retried (curl timeout/DNS/connect/TLS,
+         * HTTP 429, HTTP 5xx). Credential problems (400/401/403) and a 2xx
+         * without a usable token fail immediately: retrying those would only
+         * hide a real authentication problem.
+         */
+        protected function requestToken(array $settings, $reference = '')
         {
-            $response = $this->httpPostJson(
-                $settings['base_url'] . '/v1/Auth/GetToken',
-                ['x-hash: ' . $this->sign($settings['username'], $settings['hashkey'])],
-                [
-                    'userName' => $settings['username'],
-                    'password' => $settings['password'],
-                ]
-            );
+            $attempts = 0;
+            $deadline = microtime(true) + self::TOKEN_TOTAL_BUDGET;
+            $last = null;
 
-            if (empty($response['ok'])) {
-                return $this->fail('EPS_AUTH_TRANSPORT', ['errno' => $response['errno'] ?? '']);
+            while ($attempts < self::TOKEN_MAX_ATTEMPTS) {
+                $attempts++;
+                $startedAt = microtime(true);
+
+                $remainingBeforeAttempt = $deadline - microtime(true);
+                $this->requestTimeoutOverride = $this->timeoutForRemaining($remainingBeforeAttempt);
+
+                try {
+                    $response = $this->httpPostJson(
+                        $settings['base_url'] . '/v1/Auth/GetToken',
+                        ['x-hash: ' . $this->sign($settings['username'], $settings['hashkey'])],
+                        [
+                            'userName' => $settings['username'],
+                            'password' => $settings['password'],
+                        ]
+                    );
+                } finally {
+                    $this->requestTimeoutOverride = null;
+                }
+
+                $elapsedMs = (int) round((microtime(true) - $startedAt) * 1000);
+                $timings = is_array($response['timings'] ?? null) ? $response['timings'] : [];
+                $http = (int) ($response['status'] ?? 0);
+
+                $kind = $this->classifyAuthFailure($response);
+
+                if ($kind === 'none') {
+                    $decoded = $this->decodeJson($response['body'] ?? '');
+                    $token = '';
+
+                    if (is_array($decoded) && isset($decoded['token']) && is_string($decoded['token'])) {
+                        $token = trim($decoded['token']);
+                    }
+
+                    if ($token !== '' && strlen($token) >= self::MIN_SESSION_TOKEN_LENGTH) {
+                        $this->log('EPS_AUTH_OK', [
+                            'attempt'    => $attempts,
+                            'elapsed_ms' => $elapsedMs,
+                            'http'       => $http,
+                        ] + $timings);
+
+                        return ['ok' => true, 'token' => $token, 'attempts' => $attempts];
+                    }
+
+                    $kind = is_array($decoded) ? 'no_token' : 'invalid_json';
+                }
+
+                $this->log('EPS_AUTH_ATTEMPT', [
+                    'attempt'    => $attempts,
+                    'of'         => self::TOKEN_MAX_ATTEMPTS,
+                    'outcome'    => $kind,
+                    'elapsed_ms' => $elapsedMs,
+                    'http'       => $http,
+                    'errno'      => (int) ($response['errno'] ?? 0),
+                ] + $timings);
+
+                $last = ['kind' => $kind, 'response' => $response];
+
+                if (!$this->isRetryableAuthFailure($kind) || $attempts >= self::TOKEN_MAX_ATTEMPTS) {
+                    break;
+                }
+
+                $remaining = $deadline - microtime(true);
+                if ($remaining < self::TOKEN_RETRY_MIN_REMAINING) {
+                    $this->log('EPS_AUTH_BUDGET_EXHAUSTED', ['attempt' => $attempts, 'remaining_ms' => (int) round($remaining * 1000)]);
+                    break;
+                }
+
+                $delayMs = $this->retryDelayMs($response);
+                if (($delayMs / 1000) > ($remaining - 2)) {
+                    $this->log('EPS_AUTH_BUDGET_EXHAUSTED', ['attempt' => $attempts, 'delay_ms' => $delayMs]);
+                    break;
+                }
+
+                $this->log('EPS_AUTH_RETRY', ['next_attempt' => $attempts + 1, 'delay_ms' => $delayMs, 'outcome' => $kind]);
+                $this->sleepMs($delayMs);
             }
 
-            if (!$this->isSuccessStatus($response['status'] ?? 0)) {
-                return $this->fail('EPS_AUTH_HTTP', ['http' => $response['status'] ?? 0]);
-            }
+            $lastKind = (string) ($last['kind'] ?? 'transport');
+            $lastResponse = is_array($last['response'] ?? null) ? $last['response'] : [];
 
-            $decoded = $this->decodeJson($response['body'] ?? '');
-            if ($decoded === null) {
-                return $this->fail('EPS_AUTH_INVALID_JSON', ['http' => $response['status'] ?? 0]);
-            }
+            $this->log('EPS_AUTH_RETRY_EXHAUSTED', [
+                'ref'      => $reference,
+                'attempts' => $attempts,
+                'outcome'  => $lastKind,
+                'http'     => (int) ($lastResponse['status'] ?? 0),
+                'errno'    => (int) ($lastResponse['errno'] ?? 0),
+            ]);
 
-            $token = isset($decoded['token']) && is_string($decoded['token']) ? trim($decoded['token']) : '';
-
-            if ($token === '') {
-                return $this->fail('EPS_AUTH_NO_TOKEN', ['provider' => $this->detectProviderFailure($decoded)]);
-            }
-
-            if (strlen($token) < self::MIN_SESSION_TOKEN_LENGTH) {
-                return $this->fail('EPS_AUTH_NO_TOKEN', ['detail' => 'token_too_short']);
-            }
-
-            return ['ok' => true, 'token' => $token];
+            return $this->fail($this->authFailureCode($lastKind), [
+                'attempts' => $attempts,
+                'http'     => (int) ($lastResponse['status'] ?? 0),
+            ]);
         }
 
+        /**
+         * Classify a token/initialisation transport+HTTP result without logging
+         * the response body.
+         */
+        protected function classifyAuthFailure(array $response)
+        {
+            if (empty($response['ok'])) {
+                $errno = (int) ($response['errno'] ?? 0);
+
+                if ($errno === 28) {
+                    return 'timeout';
+                }
+                if ($errno === 6) {
+                    return 'dns';
+                }
+                if ($errno === 35 || $errno === 60) {
+                    return 'tls';
+                }
+                if ($errno === 7) {
+                    return 'connect';
+                }
+
+                return 'transport';
+            }
+
+            $status = (int) ($response['status'] ?? 0);
+
+            if ($status === 429) {
+                return 'http_429';
+            }
+            if ($status >= 500 && $status <= 599) {
+                return 'http_5xx';
+            }
+            if ($status >= 400 && $status <= 499) {
+                return 'http_4xx';
+            }
+            if ($status < 200 || $status >= 300) {
+                return 'http_other';
+            }
+
+            return 'none';
+        }
+
+        protected function isRetryableAuthFailure($kind)
+        {
+            return in_array($kind, ['timeout', 'dns', 'connect', 'tls', 'transport', 'http_429', 'http_5xx'], true);
+        }
+
+        protected function authFailureCode($kind)
+        {
+            switch ($kind) {
+                case 'invalid_json':
+                    return 'EPS_AUTH_INVALID_JSON';
+                case 'no_token':
+                    return 'EPS_AUTH_NO_TOKEN';
+                case 'http_429':
+                case 'http_5xx':
+                    return 'EPS_AUTH_UNAVAILABLE';
+                case 'http_4xx':
+                case 'http_other':
+                    return 'EPS_AUTH_HTTP';
+                default:
+                    return 'EPS_AUTH_TRANSPORT';
+            }
+        }
+
+        /**
+         * Backoff for the next attempt: Retry-After when the provider sends one
+         * (clamped to 0.2-5 s), otherwise 400 ms plus jitter.
+         */
+        protected function retryDelayMs(array $response)
+        {
+            $retryAfter = $this->retryAfterSeconds($response);
+
+            if ($retryAfter !== null) {
+                return (int) round(min(5.0, max(0.2, $retryAfter)) * 1000);
+            }
+
+            try {
+                $jitter = random_int(0, self::TOKEN_BACKOFF_JITTER_MS);
+            } catch (Exception $e) {
+                $jitter = 0;
+            }
+
+            return self::TOKEN_BACKOFF_MS + $jitter;
+        }
+
+        protected function retryAfterSeconds(array $response)
+        {
+            $headers = is_array($response['headers'] ?? null) ? $response['headers'] : [];
+            $value = $headers['retry-after'] ?? null;
+
+            if (!is_scalar($value)) {
+                return null;
+            }
+
+            $value = trim((string) $value);
+            if ($value === '') {
+                return null;
+            }
+
+            if (is_numeric($value)) {
+                return (float) $value;
+            }
+
+            $timestamp = strtotime($value);
+
+            return $timestamp === false ? null : (float) max(0, $timestamp - time());
+        }
+
+        /**
+         * Injectable so the test-suite never waits.
+         */
+        protected function sleepMs(int $ms): void
+        {
+            if ($ms > 0) {
+                usleep($ms * 1000);
+            }
+        }
         protected function sign($value, $hashKey)
         {
             return base64_encode(hash_hmac('sha512', (string) $value, (string) $hashKey, true));
@@ -948,6 +1245,12 @@
                 return false;
             }
 
+            // Legacy records have no state and were only written after a full
+            // success, so they keep behaving as "ready".
+            if ((string) ($stored['state'] ?? 'ready') !== 'ready') {
+                return false;
+            }
+
             if (empty($stored['redirect_url']) || !is_string($stored['redirect_url'])) {
                 return false;
             }
@@ -961,6 +1264,71 @@
             return (time() - $createdAt) <= self::CHECKOUT_SESSION_TTL;
         }
 
+        /**
+         * Claim the per-transaction initialisation lock.
+         *
+         * When the atomic claim helper is unavailable (unit tests, older
+         * installs) the gateway degrades to "no lock" rather than blocking the
+         * checkout.
+         */
+        protected function acquireInitLock($reference)
+        {
+            if (!function_exists('pp_gateway_meta_claim')) {
+                return true;
+            }
+
+            return (bool) pp_gateway_meta_claim($reference, self::LOCK_META_KEY, self::INIT_IN_PROGRESS_TTL);
+        }
+
+        protected function releaseInitLock($reference)
+        {
+            if (function_exists('pp_gateway_meta_release')) {
+                pp_gateway_meta_release($reference, self::LOCK_META_KEY);
+            }
+        }
+
+        /**
+         * Persist the hosted-session state machine.
+         *
+         * ready     -> a validated hosted URL exists and may be reused
+         * pending   -> an initialisation request is in flight
+         * uncertain -> the provider may or may not have created the session
+         * failed    -> a definite failure; nothing to reuse
+         */
+        protected function storeSessionState($reference, $state, array $extra = [])
+        {
+            $now = time();
+
+            $session = array_merge([
+                'state'      => (string) $state,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ], $extra);
+
+            if (!isset($session['merchant_transaction_id'])) {
+                $session['merchant_transaction_id'] = '';
+            }
+
+            return $this->saveSession($reference, $session);
+        }
+
+        /**
+         * Flush the loading indicator before the provider round-trips so the
+         * customer sees progress instead of a blank card. Never flushes in CLI
+         * (test harness) or after headers were sent.
+         */
+        protected function flushOutput(): void
+        {
+            if (PHP_SAPI === 'cli' || headers_sent()) {
+                return;
+            }
+
+            if (ob_get_level() > 0) {
+                @ob_flush();
+            }
+
+            @flush();
+        }
         protected function isRetryRequest()
         {
             return isset($_GET['retry']) && $_GET['retry'] === '1';

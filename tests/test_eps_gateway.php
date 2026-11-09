@@ -59,6 +59,27 @@ class TestEpsGateway extends EpsGateway
     public array $completions = [];
     public array $logs = [];
     public bool $completionResult = true;
+    public array $sleeps = [];
+    public bool $lockAvailable = true;
+    public int $lockAcquireCalls = 0;
+    public int $lockReleaseCalls = 0;
+
+    protected function sleepMs(int $ms): void
+    {
+        $this->sleeps[] = $ms;
+    }
+
+    protected function acquireInitLock($reference)
+    {
+        $this->lockAcquireCalls++;
+
+        return $this->lockAvailable;
+    }
+
+    protected function releaseInitLock($reference)
+    {
+        $this->lockReleaseCalls++;
+    }
 
     protected function httpPostJson($url, array $headers, array $payload)
     {
@@ -148,6 +169,23 @@ function eps_http(int $status, $body = ''): array
 function eps_transport_failure(): array
 {
     return ['ok' => false, 'errno' => 7, 'error' => 'could not connect', 'status' => 0, 'body' => ''];
+}
+
+function eps_timeout(): array
+{
+    return ['ok' => false, 'errno' => 28, 'error' => 'Operation timed out', 'status' => 0, 'body' => ''];
+}
+
+function eps_http_headers(int $status, array $headers, string $body = ''): array
+{
+    return [
+        'ok'      => true,
+        'errno'   => 0,
+        'error'   => '',
+        'status'  => $status,
+        'body'    => $body,
+        'headers' => array_change_key_case($headers, CASE_LOWER),
+    ];
 }
 
 function eps_token(): array
@@ -422,7 +460,7 @@ check('cURL transport failure is reported as EPS_AUTH_TRANSPORT', $result['ok'] 
 $gw = new TestEpsGateway();
 $gw->postQueue = [eps_token(), eps_http(500, 'gateway error')];
 $result = $gw->initiate(eps_payload_data());
-check('HTTP 5xx from InitializeEPS is reported', $result['ok'] === false && $result['code'] === 'EPS_INIT_HTTP', $result['code'] ?? '');
+check('HTTP 5xx from InitializeEPS is treated as uncertain', $result['ok'] === false && $result['code'] === 'EPS_INIT_UNCERTAIN', $result['code'] ?? '');
 
 // Failed initialisation (HTTP 400)
 $gw = new TestEpsGateway();
@@ -547,6 +585,124 @@ $gw3->postQueue = [eps_token(), eps_init('https://pg.eps.com.bd/PG?data=FreshSes
 $expired = $gw3->initiate(eps_payload_data());
 check('Expired stored session is not re-used', $expired['ok'] === true && count($gw3->postCalls) === 2);
 
+// ---------------------------------------------------------------------------
+// 5b. Token retry policy
+// ---------------------------------------------------------------------------
+
+echo "\n[Token retry]\n";
+
+$retryUrl = 'https://pg.eps.com.bd/PG?data=AbCdEfGhIjKlMnOp1234567890';
+
+// 1. Success on the first attempt: no retry.
+$gw = new TestEpsGateway();
+$gw->postQueue = [eps_token(), eps_init($retryUrl)];
+$result = $gw->initiate(eps_payload_data());
+check('Authentication succeeds on the first attempt', $result['ok'] === true);
+check('No retry is performed when the first attempt succeeds', count($gw->postCalls) === 2 && empty($gw->sleeps));
+
+// 2. First attempt times out, second succeeds.
+$gw = new TestEpsGateway();
+$gw->postQueue = [eps_timeout(), eps_token(), eps_init($retryUrl)];
+$result = $gw->initiate(eps_payload_data());
+check('First-attempt timeout is retried and succeeds', $result['ok'] === true);
+check('Exactly two token attempts were made', count($gw->postCalls) === 3, (string) count($gw->postCalls));
+check('Backoff is bounded and jittered', count($gw->sleeps) === 1 && $gw->sleeps[0] >= 400 && $gw->sleeps[0] <= 700, json_encode($gw->sleeps));
+
+// 3. Both attempts time out.
+$gw = new TestEpsGateway();
+$gw->postQueue = [eps_timeout(), eps_timeout()];
+$result = $gw->initiate(eps_payload_data());
+check('Two timeouts exhaust the retry budget', $result['ok'] === false && $result['code'] === 'EPS_AUTH_TRANSPORT', $result['code'] ?? '');
+check('No third attempt is made', count($gw->postCalls) === 2);
+check('Timeout is never reported as an authentication rejection', strpos($result['message'] ?? '', 'rejected the authentication') === false);
+
+// 4. 401 / 403 are permanent.
+foreach ([401, 403] as $status) {
+    $gw = new TestEpsGateway();
+    $gw->postQueue = [eps_http($status, ['error' => 'unauthorized'])];
+    $result = $gw->initiate(eps_payload_data());
+    check("HTTP {$status} is not retried", count($gw->postCalls) === 1 && empty($gw->sleeps), (string) count($gw->postCalls));
+    check("HTTP {$status} reports an authentication failure", $result['code'] === 'EPS_AUTH_HTTP', $result['code'] ?? '');
+}
+
+// 5. 429 honours Retry-After.
+$gw = new TestEpsGateway();
+$gw->postQueue = [eps_http_headers(429, ['retry-after' => '2']), eps_token(), eps_init($retryUrl)];
+$result = $gw->initiate(eps_payload_data());
+check('HTTP 429 is retried', $result['ok'] === true && count($gw->postCalls) === 3);
+check('Retry-After is honoured', ($gw->sleeps[0] ?? 0) === 2000, json_encode($gw->sleeps));
+
+// 6. 503 transient failure.
+$gw = new TestEpsGateway();
+$gw->postQueue = [eps_http(503, 'unavailable'), eps_token(), eps_init($retryUrl)];
+$result = $gw->initiate(eps_payload_data());
+check('HTTP 503 is retried', $result['ok'] === true);
+
+// 7. Unavailable message is not "authentication rejected".
+$gw = new TestEpsGateway();
+$gw->postQueue = [eps_http(503, 'unavailable'), eps_http(503, 'unavailable')];
+$result = $gw->initiate(eps_payload_data());
+check('Provider outage uses EPS_AUTH_UNAVAILABLE', $result['code'] === 'EPS_AUTH_UNAVAILABLE', $result['code'] ?? '');
+check('Provider outage message is customer-safe', strpos($result['message'] ?? '', 'temporarily unavailable') !== false);
+
+// ---------------------------------------------------------------------------
+// 5c. Initialisation safety
+// ---------------------------------------------------------------------------
+
+echo "\n[Initialisation safety]\n";
+
+// 8. Initialisation timeout is uncertain and never retried.
+$gw = new TestEpsGateway();
+$gw->postQueue = [eps_token(), eps_timeout()];
+$result = $gw->initiate(eps_payload_data());
+check('Initialisation timeout reports uncertainty', $result['ok'] === false && $result['code'] === 'EPS_INIT_UNCERTAIN', $result['code'] ?? '');
+check('Initialisation is never retried automatically', count($gw->postCalls) === 2, (string) count($gw->postCalls));
+check('Uncertain session state is persisted', ($gw->sessions['TXN-1']['state'] ?? '') === 'uncertain');
+check('Uncertain outcome does not claim failure', strpos($result['message'] ?? '', 'could not confirm') !== false);
+check('Lock is released after an uncertain initialisation', $gw->lockReleaseCalls === 1);
+
+// 9. Concurrent initialisation is blocked before any provider call.
+$gw = new TestEpsGateway();
+$gw->lockAvailable = false;
+$result = $gw->initiate(eps_payload_data());
+check('Concurrent initialisation is refused', $result['ok'] === false && $result['code'] === 'EPS_INIT_IN_PROGRESS', $result['code'] ?? '');
+check('A blocked initialisation makes no provider call', count($gw->postCalls) === 0);
+check('A refused lock is not released by the losing request', $gw->lockAcquireCalls === 1 && $gw->lockReleaseCalls === 0);
+
+// 10. Uncertain sessions are not reused on refresh.
+$gw = new TestEpsGateway();
+$gw->sessions['TXN-1'] = ['state' => 'uncertain', 'merchant_transaction_id' => 'mtx', 'created_at' => time()];
+$gw->postQueue = [eps_token(), eps_init($retryUrl)];
+$result = $gw->initiate(eps_payload_data());
+check('An uncertain session is not replayed', $result['ok'] === true && count($gw->postCalls) === 2);
+
+// 11. Failed sessions are not reused.
+$gw = new TestEpsGateway();
+$gw->sessions['TXN-1'] = ['state' => 'failed', 'merchant_transaction_id' => 'mtx', 'created_at' => time()];
+$gw->postQueue = [eps_token(), eps_init($retryUrl)];
+$result = $gw->initiate(eps_payload_data());
+check('A failed session is not replayed', $result['ok'] === true && count($gw->postCalls) === 2);
+
+// 12. A ready session is still reused (regression).
+$gw = new TestEpsGateway();
+$gw->sessions['TXN-1'] = [
+    'state'                   => 'ready',
+    'redirect_url'            => $retryUrl,
+    'merchant_transaction_id' => 'mtx-ready',
+    'created_at'              => time(),
+];
+$result = $gw->initiate(eps_payload_data());
+check('A ready session is reused without provider calls', $result['ok'] === true && !empty($result['reused']) && count($gw->postCalls) === 0);
+
+$gw = new TestEpsGateway();
+$gw->postQueue = [eps_token(), eps_init($retryUrl)];
+$gw->initiate(eps_payload_data());
+check('Lock is released after a successful initialisation', $gw->lockAcquireCalls === 1 && $gw->lockReleaseCalls === 1);
+
+// 13. New public reasons are customer-safe.
+check('Unavailable message exists', strpos(pp_eps_checkout_error_message('EPS_AUTH_UNAVAILABLE'), 'temporarily unavailable') !== false);
+check('Uncertain message exists', strpos(pp_eps_checkout_error_message('EPS_INIT_UNCERTAIN'), 'could not confirm') !== false);
+check('In-progress message exists', strpos(pp_eps_checkout_error_message('EPS_INIT_IN_PROGRESS'), 'already being prepared') !== false);
 // ---------------------------------------------------------------------------
 // 6. Callback verification
 // ---------------------------------------------------------------------------

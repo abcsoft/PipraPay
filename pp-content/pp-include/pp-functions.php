@@ -3993,6 +3993,87 @@
         }
     }
 
+    /**
+     * Atomically claim a short-lived per-transaction lock inside the metadata
+     * document.
+     *
+     * The row is locked with SELECT ... FOR UPDATE, so two concurrent requests
+     * cannot both obtain the claim: the second one sees the fresh claim and
+     * returns false. This is what prevents duplicate provider sessions when a
+     * customer double-clicks or reloads during initialisation.
+     *
+     * @return bool true when the caller owns the claim
+     */
+    function pp_gateway_meta_claim($ref, $key, $ttl = 90)
+    {
+        global $db_prefix;
+
+        $ref = trim((string) $ref);
+        $key = trim((string) $key);
+        $ttl = max(5, (int) $ttl);
+
+        if ($ref === '' || $key === '') {
+            return false;
+        }
+
+        try {
+            $pdo = connectDatabase();
+            if (!$pdo instanceof PDO) {
+                return false;
+            }
+
+            $pdo->beginTransaction();
+
+            $stmt = $pdo->prepare("SELECT `metadata` FROM `{$db_prefix}transaction` WHERE `ref` = :ref AND `status` = 'initiated' FOR UPDATE");
+            $stmt->execute([':ref' => $ref]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$row) {
+                $pdo->rollBack();
+                return false;
+            }
+
+            $metadata = json_decode((string) $row['metadata'], true);
+            if (!is_array($metadata)) {
+                $metadata = [];
+            }
+
+            $existing = $metadata[$key] ?? null;
+            if (is_array($existing) && isset($existing['claimed_at'])) {
+                $age = time() - (int) $existing['claimed_at'];
+                if ($age >= 0 && $age < $ttl) {
+                    $pdo->rollBack();
+                    return false;
+                }
+            }
+
+            $metadata[$key] = ['claimed_at' => time()];
+
+            $update = $pdo->prepare("UPDATE `{$db_prefix}transaction` SET `metadata` = :metadata WHERE `ref` = :ref AND `status` = 'initiated'");
+            $update->execute([
+                ':metadata' => json_encode($metadata, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                ':ref'      => $ref,
+            ]);
+
+            $pdo->commit();
+
+            return $update->rowCount() === 1;
+        } catch (Throwable $e) {
+            if (isset($pdo) && $pdo instanceof PDO && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            error_log('[Gateway Meta] claim failed: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Release a claim created by pp_gateway_meta_claim().
+     */
+    function pp_gateway_meta_release($ref, $key)
+    {
+        return pp_gateway_meta_set($ref, $key, []);
+    }
     function ensurePersonalPaymentSessionsTable() {
         static $migrated = false;
         if ($migrated) return;

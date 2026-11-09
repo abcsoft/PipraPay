@@ -248,6 +248,7 @@ validation and fallback layers do not depend on them.
 | `EPS_AUTH_HTTP` | non-2xx on `GetToken` | `authentication` |
 | `EPS_AUTH_INVALID_JSON` | unreadable token response | `provider_response` |
 | `EPS_AUTH_NO_TOKEN` | 2xx without a usable `token` | `authentication` |
+| `EPS_AUTH_UNAVAILABLE` | 429 or 5xx from `GetToken` (provider busy/outage) | `unavailable` |
 | `EPS_INIT_TRANSPORT` | cURL failure on `InitializeEPS` | `unreachable` |
 | `EPS_INIT_HTTP` | non-2xx on `InitializeEPS` | `provider_response` |
 | `EPS_INIT_INVALID_JSON` | unreadable initialization response | `provider_response` |
@@ -257,6 +258,8 @@ validation and fallback layers do not depend on them.
 | `EPS_INIT_UNTRUSTED_HOST` | host outside `eps.com.bd`, or credentials in URL | `session` |
 | `EPS_INIT_NULL_SESSION` | `data=null` / `undefined` / empty / no session parameter | `session` |
 | `EPS_INIT_MALFORMED_SESSION` | too short / illegal characters / unparsable URL | `session` |
+| `EPS_INIT_UNCERTAIN` | timeout or 5xx during `InitializeEPS`: the provider may have created the session | `uncertain` |
+| `EPS_INIT_IN_PROGRESS` | another initialisation for the same transaction holds the claim | `in_progress` |
 | `EPS_CALLBACK_INVALID` | callback without identifiers | `verification` |
 | `EPS_CALLBACK_MISMATCH` | `ValueA` or merchant transaction id mismatch | `verification` |
 | `EPS_CALLBACK_VERIFY_FAILED` | status endpoint transport/HTTP/JSON/status failure | `verification` |
@@ -420,3 +423,57 @@ CSP/frame policy. The integration never bypasses EPS `CSP` or `X-Frame-Options`.
 3. The source of the hosted-page 504 is provider-side and unconfirmed.
 4. Callback parameter names (`MerchantTransactionId`, `EPSTransactionId`) are
    taken from the existing integration and are not re-verified against a spec.
+
+---
+
+## 12. Retry, timeout and concurrency policy
+
+### GetToken
+
+| Setting | Value |
+|---|---|
+| Attempts | 2 (the second only for transient failures) |
+| Per-attempt timeout | `min(30 s, remaining budget)` |
+| Wall-clock budget | 35 s |
+| Backoff | 400 ms + 0–300 ms jitter; `Retry-After` clamped to 0.2–5 s |
+
+Retried: curl timeout/DNS/connect/TLS, HTTP 429, HTTP 5xx.
+Not retried: HTTP 400/401/403, a 2xx without a usable token, malformed JSON.
+
+Worst case ≈ 36 s (30 s first attempt + ≤0.7 s backoff + ≤5 s second attempt).
+The last attempt's timeout shrinks to whatever budget remains, so the loop cannot
+run longer than the budget plus one backoff.
+
+### InitializeEPS
+
+Exactly one attempt, 30 s. It is **never** retried automatically: a timeout may
+hide a session the provider already created. The outcome is recorded as
+`uncertain`, the customer sees a "could not confirm" screen with an explicit
+"Try again", and nothing is ever marked completed from an uncertain state.
+
+### Session state machine (`pp_transaction.metadata.eps_checkout`)
+
+| State | Meaning | Reused? |
+|---|---|---|
+| `ready` | validated hosted URL | yes, within 900 s |
+| `pending` | initialisation in flight | no |
+| `uncertain` | provider may have created a session | no |
+| `failed` | definite failure | no |
+
+Legacy records without `state` are treated as `ready` (they were only written
+after a full success).
+
+### Concurrency
+
+`pp_gateway_meta_claim()` performs `SELECT … FOR UPDATE` inside a transaction and
+stores a `claimed_at` timestamp under `eps_init_lock` (TTL 90 s). A second request
+for the same transaction — double click, reload, second tab — gets
+`EPS_INIT_IN_PROGRESS` **before any provider call**. The claim is released in a
+`finally` block; the loser never releases a claim it did not take. An expired
+claim may be taken over.
+
+### Worst-case customer wait
+
+`36 s (token) + 30 s (initialisation) ≈ 66 s`, during which the loading indicator
+is already painted (output is flushed before the first provider call). No path
+leaves the spinner spinning: every branch ends in a redirect or an error screen.
